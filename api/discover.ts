@@ -48,16 +48,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  let url: URL;
-  try {
-    url = new URL(req.url || "/", "https://leadhunter.internal");
-  } catch {
-    sendJson(res, { error: "Endereço de pesquisa inválido." }, 400);
-    return;
-  }
-
-  const cityInput = (url.searchParams.get("city") || "").trim();
-  const category = url.searchParams.get("category") || "";
+  // Vercel fornece req.url como caminho relativo; parsear apenas a query string
+  // evita depender de host/origem encaminhados pelo proxy.
+  const rawQuery = (req.url || "").split("?", 2)[1] || "";
+  const params = new URLSearchParams(rawQuery);
+  const cityInput = (params.get("city") || "").trim();
+  const category = params.get("category") || "";
   if (cityInput.length < 2 || cityInput.length > 100) {
     sendJson(res, { error: "Informe uma cidade válida (2 a 100 caracteres)." }, 400);
     return;
@@ -83,40 +79,47 @@ area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 out center 100;`;
 
   try {
+    const controller = new AbortController();
+    const hardStop = setTimeout(() => controller.abort(), 14000);
+
     const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
-      const upstream = await fetch(endpoint, {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
           "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
         },
         body: new URLSearchParams({ data: query }),
-        signal: AbortSignal.timeout(12000)
+        signal: controller.signal
       });
 
-      if (!upstream.ok) {
-        throw new Error(`Overpass ${new URL(endpoint).hostname} respondeu HTTP ${upstream.status}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} em ${endpoint.replace(/^https:\/\//, "").split("/")[0]}`);
       }
 
-      const data = await upstream.json() as { elements?: OsmElement[] };
-      if (!Array.isArray(data.elements)) {
-        throw new Error(`Resposta inválida de ${new URL(endpoint).hostname}`);
-      }
-
-      console.info("[LeadHunter] Fonte respondeu:", new URL(endpoint).hostname, data.elements.length);
+      const data = await response.json() as { elements?: OsmElement[] };
+      if (!Array.isArray(data.elements)) throw new Error("Formato de resposta Overpass inválido");
+      console.info("[LeadHunter] Fonte Overpass respondeu:", endpoint.replace(/^https:\/\//, "").split("/")[0], data.elements.length);
       return data;
     });
 
     let payload: { elements?: OsmElement[] };
     try {
-      // Dispara as fontes em paralelo para evitar 3 esperas sequenciais.
-      payload = await Promise.any(attempts);
+      // Primeira fonte válida vence; limite global impede que a função chegue aos 35s.
+      payload = await Promise.race([
+        Promise.any(attempts),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("Prazo global da consulta Overpass excedido")), 14500);
+        })
+      ]);
     } catch (error) {
-      console.error("[LeadHunter] Todas as fontes Overpass falharam:", error);
+      console.error("[LeadHunter] Falha em todas as fontes Overpass:", error);
       sendJson(res, {
-        error: "As fontes públicas de mapas não responderam. Tente novamente em instantes."
+        error: "A busca pública está indisponível no momento. Tente novamente em alguns instantes."
       }, 503, { "Retry-After": "15" });
       return;
+    } finally {
+      clearTimeout(hardStop);
     }
 
     const seen = new Set<string>();
