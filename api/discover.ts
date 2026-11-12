@@ -44,7 +44,7 @@ async function geocodeCity(city: string): Promise<{ south: number; west: number;
   const response = await fetch(`${NOMINATIM_ENDPOINT}?${params.toString()}`, {
     headers: {
       "Accept": "application/json",
-      "User-Agent": "LeadHunterAI/1.0 (business discovery; contact: support@leadhunter.ai)"
+      "User-Agent": "LeadHunterAI/1.0 (https://github.com/jonzin12a-cloud/leadhunter-ai)"
     },
     signal: AbortSignal.timeout(6500)
   });
