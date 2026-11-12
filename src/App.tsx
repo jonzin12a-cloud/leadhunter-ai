@@ -35,6 +35,12 @@ const readSavedLeads = (): Lead[] => {
     );
   } catch { return []; }
 };
+const whatsappDigits = (value: string) => {
+  let digits = value.replace(/\\D/g, "");
+  if (digits.startsWith("0") && digits.length >= 11) digits = digits.slice(1);
+  if (!digits.startsWith("55") && (digits.length === 10 || digits.length === 11)) digits = "55" + digits;
+  return digits;
+};
 const csvCell = (value: unknown) => {
   const text = String(value ?? "");
   const safe = /^\s*[=+@-]/.test(text) ? "'" + text : text;
