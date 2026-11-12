@@ -1,7 +1,8 @@
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass.private.coffee/api/interpreter"
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
 ];
 
 const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
@@ -97,7 +98,7 @@ async function geocodeCity(city: string): Promise<{ south: number; west: number;
 
 async function queryOverpass(query: string): Promise<OsmElement[]> {
   const controller = new AbortController();
-  const abortAll = setTimeout(() => controller.abort(), 10500);
+  const abortAll = setTimeout(() => controller.abort(), 22000);
   const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
     const response = await fetch(endpoint, {
       method: "POST",
@@ -110,7 +111,8 @@ async function queryOverpass(query: string): Promise<OsmElement[]> {
       signal: controller.signal
     });
     if (!response.ok) throw new Error(`${new URL(endpoint).hostname}: HTTP ${response.status}`);
-    const data = await response.json() as { elements?: OsmElement[] };
+    const data = await response.json() as { elements?: OsmElement[]; remark?: string };
+    if (data.remark) throw new Error(`${new URL(endpoint).hostname}: ${data.remark}`);
     if (!Array.isArray(data.elements)) throw new Error(`${new URL(endpoint).hostname}: resposta inválida`);
     return data.elements;
   });
@@ -156,7 +158,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   try {
     // Geocodificar primeiro evita a busca cara por nome de área administrativa no Overpass.
     const bounds = await geocodeCity(cityInput);
-    const query = `[out:json][timeout:8];
+    const query = `[out:json][timeout:18];
 (
   nwr["name"]${categoryFilter}(${bounds.south},${bounds.west},${bounds.north},${bounds.east});
 );
