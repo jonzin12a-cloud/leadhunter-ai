@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Building2, Check, ChevronDown,
   Globe2, LayoutDashboard, MapPin, MessageCircle, Plus, Search, Settings2,
@@ -53,7 +54,7 @@ function App() {
     setLeads(old => [{ ...result, status: "Novo" }, ...old]);
     setNotice("Empresa salva na sua carteira.");
   };
-  const discover = async (event: React.FormEvent<HTMLFormElement>) => {
+  const discover = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (city.trim().length < 2) { setError("Informe uma cidade válida."); return; }
     setLoading(true); setError(""); setResults([]);
@@ -94,7 +95,7 @@ function App() {
       <div className="sidebar-bottom"><div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><b>Prospecção com evidências</b><p>Descubra empresas mapeadas e valide cada oportunidade antes do contato.</p><button onClick={() => setActive("Descobrir leads")}>Abrir radar <ArrowUpRight size={13}/></button></div><div className="profile"><div className="avatar">L</div><div><b>Seu workspace</b><small>Ambiente inicial</small></div></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{active}</b></div><div className="top-actions"><div className="live"><i/> Fonte pública conectada</div><button className="icon-button" aria-label="Notificações"><Bell size={18}/></button><div className="avatar small">L</div></div></header>
+      <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{active}</b></div><div className="top-actions"><div className="live"><i/> Pesquisa por fonte pública</div><button className="icon-button" aria-label="Notificações"><Bell size={18}/></button><div className="avatar small">L</div></div></header>
       <div className="content">
         <div className="welcome-row"><div><div className="eyebrow"><Sparkles size={13}/> INTELIGÊNCIA COMERCIAL</div><h1>Encontre oportunidades<br/><span>antes da concorrência.</span></h1><p className="subtitle">Descubra negócios locais e organize sua prospecção em um só lugar.</p></div><button className="primary-btn" onClick={() => setShowAdd(true)}><Plus size={17}/> Adicionar lead</button></div>
 
