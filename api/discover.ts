@@ -75,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  const query = `[out:json][timeout:10];
+  const query = `[out:json][timeout:7];
 area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 (
   nwr["name"]${categoryFilter}(area.searchArea);
@@ -95,7 +95,7 @@ out center 100;`;
             "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
           },
           body: new URLSearchParams({ data: query }),
-          signal: AbortSignal.timeout(12000)
+          signal: AbortSignal.timeout(8000)
         });
 
         if (upstream.status === 429) {
