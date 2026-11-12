@@ -133,7 +133,7 @@ function App() {
     try { await updateDoc(doc(db, "users", user.uid, "leads", id), { status: next }); }
     catch { setNotice("Não foi possível atualizar o status deste lead."); }
   };
-  const deleteLead = (lead: Lead) => {
+  const deleteLead = async (lead: Lead) => {
     if (!window.confirm("Excluir " + lead.name + " da sua carteira? Esta ação não pode ser desfeita.")) return;
     if (!user || !db) return;
     try { await deleteDoc(doc(db, "users", user.uid, "leads", lead.id)); setNotice("Lead removido da carteira."); }
