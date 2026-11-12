@@ -185,9 +185,13 @@ out center 60;`;
         } catch { return ""; }
       };
       const website = cleanUrl(getTag("website", "contact:website", "url"));
+      const normalizePhone = (value: string) => {
+        const linkedNumber = value.match(/(?:wa\\.me\\/|phone=)(\\+?[0-9]+)/i)?.[1];
+        return (linkedNumber || value).replace(/[^0-9+]/g, "");
+      };
       const phoneRaw = getTag("phone", "contact:phone", "mobile", "contact:mobile");
-      const phone = phoneRaw.replace(/[^0-9+]/g, "");
-      const whatsapp = getTag("contact:whatsapp", "whatsapp", "phone", "contact:phone").replace(/[^0-9+]/g, "");
+      const phone = normalizePhone(phoneRaw);
+      const whatsapp = normalizePhone(getTag("contact:whatsapp", "whatsapp", "phone", "contact:phone"));
       const instagramRaw = getTag("contact:instagram", "instagram");
       const facebookRaw = getTag("contact:facebook", "facebook");
       const instagram = instagramRaw ? (/^https?:\/\//i.test(instagramRaw) ? cleanUrl(instagramRaw) : "https://www.instagram.com/" + instagramRaw.replace(/^@/, "").replace(/^.*instagram\.com\//i, "").replace(/\/$/, "") + "/") : "";
@@ -197,7 +201,7 @@ out center 60;`;
       const houseNumber = getTag("addr:housenumber");
       const suburb = getTag("addr:suburb", "addr:neighbourhood");
       const postcode = getTag("addr:postcode");
-      const address = [street, houseNumber, suburb, postcode].filter(Boolean).join(", ");
+      const address = getTag("addr:full") || [street, houseNumber, suburb, postcode].filter(Boolean).join(", ");
       const lat = element.lat ?? element.center?.lat ?? null;
       const lon = element.lon ?? element.center?.lon ?? null;
       const normalizedName = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -224,7 +228,7 @@ out center 60;`;
       const score = Math.min(95, 35 + Object.values(scoreFactors).reduce((sum, value) => sum + value, 0));
 
       return [{
-        id, name, category, city: city + (address ? ", " + address : ""), address, phone, whatsapp,
+        id, name, category, city: cityInput, address, phone, whatsapp,
         email, instagram, facebook, lat, lon, openingHours: getTag("opening_hours"),
         websiteStatus: website ? "website_found" : "website_not_identified",
         website, score, scoreFactors, possibleDuplicate,
@@ -247,7 +251,7 @@ out center 60;`;
       source: "OpenStreetMap",
       attribution: "© OpenStreetMap contributors",
       searchedAt: new Date().toISOString()
-    });
+    }, 200, { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600" });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Erro externo desconhecido";
     console.error("[LeadHunter] Falha na descoberta:", detail);
