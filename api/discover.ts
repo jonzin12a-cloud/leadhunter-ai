@@ -1,3 +1,5 @@
+declare const process: { env: Record<string, string | undefined> };
+
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
@@ -98,27 +100,33 @@ async function geocodeCity(city: string): Promise<{ south: number; west: number;
 
 async function queryOverpass(query: string): Promise<OsmElement[]> {
   const controller = new AbortController();
-  const abortAll = setTimeout(() => controller.abort(), 22000);
-  const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
-    const response = await fetch(endpoint, {
+  const abortAll = setTimeout(() => controller.abort(), 55000);
+  const apiKey = process.env.OVERPASS_API_KEY?.trim();
+  const endpoints = [
+    ...(apiKey ? [{ url: "https://api.overpass.ch/v1/interpreter", headers: { "X-API-Key": apiKey } }] : []),
+    ...OVERPASS_ENDPOINTS.map((url) => ({ url, headers: {} as Record<string, string> }))
+  ];
+  const attempts = endpoints.map(async ({ url, headers: authHeaders }) => {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Accept": "application/json",
-        "User-Agent": "LeadHunterAI/1.0 (business discovery)"
+        "User-Agent": "LeadHunterAI/1.0 (business discovery)",
+        ...authHeaders
       },
       body: new URLSearchParams({ data: query }),
       signal: controller.signal
     });
-    if (!response.ok) throw new Error(`${new URL(endpoint).hostname}: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`${new URL(url).hostname}: HTTP ${response.status}`);
     const data = await response.json() as { elements?: OsmElement[]; remark?: string };
-    if (data.remark) throw new Error(`${new URL(endpoint).hostname}: ${data.remark}`);
-    if (!Array.isArray(data.elements)) throw new Error(`${new URL(endpoint).hostname}: resposta inválida`);
+    if (data.remark) throw new Error(`${new URL(url).hostname}: ${data.remark}`);
+    if (!Array.isArray(data.elements)) throw new Error(`${new URL(url).hostname}: resposta inválida`);
     return data.elements;
   });
 
   try {
-    // A primeira resposta válida encerra as demais conexões.
+    // Prioriza o serviço autenticado; mantém instâncias públicas como fallback.
     const elements = await Promise.any(attempts);
     controller.abort();
     return elements;
