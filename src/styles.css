@@ -41,3 +41,8 @@
 .result-row .result-link{flex-shrink:0}
 .result-main .evidence{overflow-wrap:anywhere}
 @media(max-width:760px){.row-actions{gap:4px}.row-action{width:30px;height:30px}}
+
+.lead-quality{display:grid;gap:3px}
+.lead-quality b{font-size:10px;color:#c9bbff}
+.lead-quality small{font-size:8px;color:#e9b77d}
+@media(min-width:761px){.table-wrap table{min-width:980px}}
