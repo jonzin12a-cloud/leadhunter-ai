@@ -4,6 +4,8 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass.private.coffee/api/interpreter"
 ];
 
+const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
+
 const allowedCategories: Record<string, string> = {
   "Restaurantes e cafés": '["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court"]',
   "Lojas e comércio": '["shop"]',
@@ -14,18 +16,12 @@ const allowedCategories: Record<string, string> = {
   "Hospedagem e turismo": '["tourism"~"hotel|guest_house|hostel|motel"]'
 };
 
-type VercelRequest = {
-  method?: string;
-  url?: string;
-  headers: { host?: string };
-};
-
+type VercelRequest = { method?: string; url?: string };
 type VercelResponse = {
   status(code: number): VercelResponse;
   setHeader(name: string, value: string): VercelResponse;
   json(data: unknown): VercelResponse;
 };
-
 type OsmElement = {
   type: "node" | "way" | "relation";
   id: number;
@@ -34,12 +30,66 @@ type OsmElement = {
   center?: { lat: number; lon: number };
   tags?: Record<string, string>;
 };
+type GeocodeResult = { boundingbox?: string[]; display_name?: string };
 
 function sendJson(res: VercelResponse, data: unknown, status = 200, headers: Record<string, string> = {}) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
   for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
-  return res.status(status).json(data);
+  res.status(status).json(data);
+}
+
+async function geocodeCity(city: string): Promise<{ south: number; west: number; north: number; east: number }> {
+  const params = new URLSearchParams({ q: `${city}, Brazil`, format: "jsonv2", limit: "1", countrycodes: "br" });
+  const response = await fetch(`${NOMINATIM_ENDPOINT}?${params.toString()}`, {
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "LeadHunterAI/1.0 (business discovery; contact: support@leadhunter.ai)"
+    },
+    signal: AbortSignal.timeout(6500)
+  });
+  if (!response.ok) throw new Error(`Geocodificação respondeu HTTP ${response.status}`);
+  const places = await response.json() as GeocodeResult[];
+  const box = places[0]?.boundingbox;
+  if (!box || box.length !== 4) throw new Error("Cidade não localizada pelo serviço geográfico");
+  const [south, north, west, east] = box.map(Number);
+  if (![south, west, north, east].every(Number.isFinite) || south >= north || west >= east) {
+    throw new Error("Limites geográficos inválidos");
+  }
+  return { south, west, north, east };
+}
+
+async function queryOverpass(query: string): Promise<OsmElement[]> {
+  const controller = new AbortController();
+  const abortAll = setTimeout(() => controller.abort(), 10500);
+  const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Accept": "application/json",
+        "User-Agent": "LeadHunterAI/1.0 (business discovery)"
+      },
+      body: new URLSearchParams({ data: query }),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`${new URL(endpoint).hostname}: HTTP ${response.status}`);
+    const data = await response.json() as { elements?: OsmElement[] };
+    if (!Array.isArray(data.elements)) throw new Error(`${new URL(endpoint).hostname}: resposta inválida`);
+    return data.elements;
+  });
+
+  try {
+    // A primeira resposta válida encerra as demais conexões.
+    const elements = await Promise.any(attempts);
+    controller.abort();
+    return elements;
+  } catch (error) {
+    console.error("[LeadHunter] Falha nas instâncias Overpass:", error);
+    throw new Error("Nenhuma instância Overpass respondeu");
+  } finally {
+    clearTimeout(abortAll);
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
@@ -48,17 +98,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  // Vercel fornece req.url como caminho relativo; parsear apenas a query string
-  // evita depender de host/origem encaminhados pelo proxy.
-  const rawQuery = (req.url || "").split("?", 2)[1] || "";
-  const params = new URLSearchParams(rawQuery);
+  const params = new URLSearchParams((req.url || "").split("?", 2)[1] || "");
   const cityInput = (params.get("city") || "").trim();
   const category = params.get("category") || "";
   if (cityInput.length < 2 || cityInput.length > 100) {
     sendJson(res, { error: "Informe uma cidade válida (2 a 100 caracteres)." }, 400);
     return;
   }
-
   const categoryFilter = allowedCategories[category];
   if (!categoryFilter) {
     sendJson(res, { error: "Segmento não suportado." }, 400);
@@ -71,59 +117,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  const query = `[out:json][timeout:7];
-area["name"="${city}"]["boundary"="administrative"]->.searchArea;
-(
-  nwr["name"]${categoryFilter}(area.searchArea);
-);
-out center 100;`;
-
   try {
-    const controller = new AbortController();
-    const hardStop = setTimeout(() => controller.abort(), 14000);
+    // Geocodificar primeiro evita a busca cara por nome de área administrativa no Overpass.
+    const bounds = await geocodeCity(city);
+    const query = `[out:json][timeout:8];
+(
+  nwr["name"]${categoryFilter}(${bounds.south},${bounds.west},${bounds.north},${bounds.east});
+);
+out center 60;`;
 
-    const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-          "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
-        },
-        body: new URLSearchParams({ data: query }),
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} em ${endpoint.replace(/^https:\/\//, "").split("/")[0]}`);
-      }
-
-      const data = await response.json() as { elements?: OsmElement[] };
-      if (!Array.isArray(data.elements)) throw new Error("Formato de resposta Overpass inválido");
-      console.info("[LeadHunter] Fonte Overpass respondeu:", endpoint.replace(/^https:\/\//, "").split("/")[0], data.elements.length);
-      return data;
-    });
-
-    let payload: { elements?: OsmElement[] };
-    try {
-      // Primeira fonte válida vence; limite global impede que a função chegue aos 35s.
-      payload = await Promise.race([
-        Promise.any(attempts),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("Prazo global da consulta Overpass excedido")), 14500);
-        })
-      ]);
-    } catch (error) {
-      console.error("[LeadHunter] Falha em todas as fontes Overpass:", error);
-      sendJson(res, {
-        error: "A busca pública está indisponível no momento. Tente novamente em alguns instantes."
-      }, 503, { "Retry-After": "15" });
-      return;
-    } finally {
-      clearTimeout(hardStop);
-    }
-
+    const elements = await queryOverpass(query);
     const seen = new Set<string>();
-    const results = (payload.elements || []).flatMap((element) => {
+    const results = elements.flatMap((element) => {
       const tags = element.tags || {};
       const name = (tags.name || "").trim();
       if (!name) return [];
@@ -137,19 +142,18 @@ out center 100;`;
         try {
           const candidate = new URL(/^https?:\/\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`);
           if (candidate.protocol === "https:" || candidate.protocol === "http:") website = candidate.toString();
-        } catch { /* Ignore malformed website tags from the public source. */ }
+        } catch { /* Ignora URLs inválidas da fonte pública. */ }
       }
-
       const phone = tags.phone || tags["contact:phone"] || "";
       const addressParts = [tags["addr:street"], tags["addr:housenumber"], tags["addr:suburb"]].filter(Boolean);
       const location = addressParts.length ? `, ${addressParts.join(", ")}` : "";
-      const score = Math.min(95, 45 + (phone ? 12 : 0) + (addressParts.length ? 8 : 0) + (tags.opening_hours ? 8 : 0) + (website ? 0 : 10));
+      const score = Math.min(95, 45 + (phone ? 12 : 0) + (addressParts.length ? 8 : 0) + (tags.opening_hours ? 8 : 0) + (!website ? 10 : 0));
 
       return [{
         id,
         name,
         category,
-        city: cityInput.split(",")[0].trim() + location,
+        city: city + location,
         phone: phone.replace(/[^0-9+]/g, ""),
         websiteStatus: website ? "website_found" : "website_not_identified",
         website,
@@ -167,7 +171,15 @@ out center 100;`;
       attribution: "© OpenStreetMap contributors",
       searchedAt: new Date().toISOString()
     });
-  } catch {
-    sendJson(res, { error: "Não foi possível concluir a pesquisa. Tente novamente em instantes." }, 502);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Erro externo desconhecido";
+    console.error("[LeadHunter] Falha na descoberta:", detail);
+    if (detail.includes("Geocodificação") || detail.includes("Cidade não localizada") || detail.includes("Limites geográficos")) {
+      sendJson(res, { error: "Não conseguimos localizar essa cidade. Confira o nome e tente novamente." }, 422);
+      return;
+    }
+    sendJson(res, {
+      error: "A fonte pública de empresas está temporariamente indisponível. Tente novamente em instantes."
+    }, 503, { "Retry-After": "20" });
   }
 }
