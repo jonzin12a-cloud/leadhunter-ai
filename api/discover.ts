@@ -83,45 +83,42 @@ area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 out center 100;`;
 
   try {
-    let payload: { elements?: OsmElement[] } | undefined;
-    let lastStatus = 0;
+    const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
+      const upstream = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
+        },
+        body: new URLSearchParams({ data: query }),
+        signal: AbortSignal.timeout(12000)
+      });
 
-    for (const endpoint of OVERPASS_ENDPOINTS) {
-      try {
-        const upstream = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
-          },
-          body: new URLSearchParams({ data: query }),
-          signal: AbortSignal.timeout(8000)
-        });
-
-        if (upstream.status === 429) {
-          lastStatus = 429;
-          continue;
-        }
-        if (!upstream.ok) {
-          lastStatus = upstream.status;
-          continue;
-        }
-
-        payload = await upstream.json() as { elements?: OsmElement[] };
-        break;
-      } catch {
-        // Try the next independent public Overpass instance.
+      if (!upstream.ok) {
+        throw new Error(`Overpass ${new URL(endpoint).hostname} respondeu HTTP ${upstream.status}`);
       }
-    }
 
-    if (!payload) {
-      if (lastStatus === 429) {
-        sendJson(res, { error: "As fontes públicas estão temporariamente ocupadas. Aguarde um pouco e tente novamente." }, 503, { "Retry-After": "30" });
-        return;
+      const data = await upstream.json() as { elements?: OsmElement[] };
+      if (!Array.isArray(data.elements)) {
+        throw new Error(`Resposta inválida de ${new URL(endpoint).hostname}`);
       }
-      sendJson(res, { error: "As fontes públicas de mapas estão demorando ou indisponíveis. Tente novamente em instantes." }, 503, { "Retry-After": "15" });
+
+      console.info("[LeadHunter] Fonte respondeu:", new URL(endpoint).hostname, data.elements.length);
+      return data;
+    });
+
+    let payload: { elements?: OsmElement[] };
+    try {
+      // Dispara as fontes em paralelo para evitar 3 esperas sequenciais.
+      payload = await Promise.any(attempts);
+    } catch (error) {
+      console.error("[LeadHunter] Todas as fontes Overpass falharam:", error);
+      sendJson(res, {
+        error: "As fontes públicas de mapas não responderam. Tente novamente em instantes."
+      }, 503, { "Retry-After": "15" });
       return;
     }
+
     const seen = new Set<string>();
     const results = (payload.elements || []).flatMap((element) => {
       const tags = element.tags || {};
