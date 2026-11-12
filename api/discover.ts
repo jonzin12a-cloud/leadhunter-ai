@@ -64,8 +64,14 @@ out center 100;`;
       const id = `osm-${element.type}-${element.id}`;
       if (seen.has(id)) return [];
       seen.add(id);
-      const rawWebsite = tags.website || tags["contact:website"] || "";
-      const website = rawWebsite ? (/^https?:\\/\\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`) : "";
+      const rawWebsite = (tags.website || tags["contact:website"] || "").trim();
+      let website = "";
+      if (rawWebsite) {
+        try {
+          const candidate = new URL(/^https?:\/\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`);
+          if (candidate.protocol === "https:" || candidate.protocol === "http:") website = candidate.toString();
+        } catch { /* Ignore malformed website tags from the public source. */ }
+      }
       const phone = tags.phone || tags["contact:phone"] || "";
       const addressParts = [tags["addr:street"], tags["addr:housenumber"], tags["addr:suburb"]].filter(Boolean);
       const location = addressParts.length ? `, ${addressParts.join(", ")}` : "";
