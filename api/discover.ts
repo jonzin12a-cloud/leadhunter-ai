@@ -31,30 +31,59 @@ type OsmElement = {
   tags?: Record<string, string>;
 };
 type GeocodeResult = { boundingbox?: string[]; display_name?: string };
-
-function sendJson(res: VercelResponse, data: unknown, status = 200, headers: Record<string, string> = {}) {
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
-  for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
-  res.status(status).json(data);
-}
+type PhotonFeature = {
+  properties?: { extent?: number[]; name?: string; city?: string; state?: string; country?: string };
+  geometry?: { coordinates?: number[] };
+};
 
 async function geocodeCity(city: string): Promise<{ south: number; west: number; north: number; east: number }> {
-  const params = new URLSearchParams({ q: `${city}, Brazil`, format: "jsonv2", limit: "1", countrycodes: "br" });
-  const response = await fetch(`${NOMINATIM_ENDPOINT}?${params.toString()}`, {
+  // Photon é a primeira opção; Nominatim fica como fallback independente.
+  const photonUrl = new URL("https://photon.komoot.io/api/");
+  photonUrl.search = new URLSearchParams({ q: `${city}, Bahia, Brazil`, limit: "1", lang: "pt" }).toString();
+
+  try {
+    const response = await fetch(photonUrl, {
+      headers: { "Accept": "application/geo+json", "User-Agent": "LeadHunterAI/1.0 (https://github.com/jonzin12a-cloud/leadhunter-ai)" },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (response.ok) {
+      const data = await response.json() as { features?: PhotonFeature[] };
+      const feature = data.features?.[0];
+      const extent = feature?.properties?.extent;
+      if (extent?.length === 4 && extent.every(Number.isFinite)) {
+        const [west, south, east, north] = extent;
+        if (south < north && west < east) return { south, west, north, east };
+      }
+      const coordinates = feature?.geometry?.coordinates;
+      if (coordinates?.length >= 2 && coordinates.slice(0, 2).every(Number.isFinite)) {
+        const [lon, lat] = coordinates;
+        // Fallback local aproximado de 8 km em torno do centro quando Photon não retorna extent.
+        const latDelta = 0.072;
+        const lonDelta = 0.072 / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+        return { south: lat - latDelta, west: lon - lonDelta, north: lat + latDelta, east: lon + lonDelta };
+      }
+    } else {
+      console.warn("[LeadHunter] Photon HTTP:", response.status);
+    }
+  } catch (error) {
+    console.warn("[LeadHunter] Photon indisponível:", error instanceof Error ? error.message : "erro desconhecido");
+  }
+
+  const params = new URLSearchParams({ q: `${city}, Bahia, Brazil`, format: "jsonv2", limit: "1", countrycodes: "br" });
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
     headers: {
       "Accept": "application/json",
       "User-Agent": "LeadHunterAI/1.0 (https://github.com/jonzin12a-cloud/leadhunter-ai)"
     },
     signal: AbortSignal.timeout(6500)
   });
-  if (!response.ok) throw new Error(`Geocodificação respondeu HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`GEOCODER_HTTP_${response.status}`);
   const places = await response.json() as GeocodeResult[];
   const box = places[0]?.boundingbox;
-  if (!box || box.length !== 4) throw new Error("Cidade não localizada pelo serviço geográfico");
+  if (!box || box.length !== 4) throw new Error("CITY_NOT_FOUND");
   const [south, north, west, east] = box.map(Number);
   if (![south, west, north, east].every(Number.isFinite) || south >= north || west >= east) {
-    throw new Error("Limites geográficos inválidos");
+    throw new Error("INVALID_CITY_BOUNDS");
   }
   return { south, west, north, east };
 }
