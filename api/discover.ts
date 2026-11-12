@@ -166,38 +166,66 @@ out center 60;`;
 
     const elements = await queryOverpass(query);
     const seen = new Set<string>();
+    const normalizedNames = new Map<string, Array<{ phone: string; lat: number | null; lon: number | null }>>();
     const results = elements.flatMap((element) => {
       const tags = element.tags || {};
       const name = (tags.name || "").trim();
       if (!name) return [];
-      const id = `osm-${element.type}-${element.id}`;
+      const id = "osm-" + element.type + "-" + element.id;
       if (seen.has(id)) return [];
       seen.add(id);
 
-      const rawWebsite = (tags.website || tags["contact:website"] || "").trim();
-      let website = "";
-      if (rawWebsite) {
+      const getTag = (...keys: string[]) => keys.map((key) => tags[key]?.trim()).find(Boolean) || "";
+      const cleanUrl = (raw: string) => {
+        if (!raw) return "";
         try {
-          const candidate = new URL(/^https?:\/\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`);
-          if (candidate.protocol === "https:" || candidate.protocol === "http:") website = candidate.toString();
-        } catch { /* Ignora URLs inválidas da fonte pública. */ }
-      }
-      const phone = tags.phone || tags["contact:phone"] || "";
-      const addressParts = [tags["addr:street"], tags["addr:housenumber"], tags["addr:suburb"]].filter(Boolean);
-      const location = addressParts.length ? `, ${addressParts.join(", ")}` : "";
-      const score = Math.min(95, 45 + (phone ? 12 : 0) + (addressParts.length ? 8 : 0) + (tags.opening_hours ? 8 : 0) + (!website ? 10 : 0));
+          const candidate = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw);
+          return candidate.protocol === "https:" || candidate.protocol === "http:" ? candidate.toString() : "";
+        } catch { return ""; }
+      };
+      const website = cleanUrl(getTag("website", "contact:website", "url"));
+      const phoneRaw = getTag("phone", "contact:phone", "mobile", "contact:mobile");
+      const phone = phoneRaw.replace(/[^0-9+]/g, "");
+      const whatsapp = getTag("contact:whatsapp", "whatsapp", "phone", "contact:phone").replace(/[^0-9+]/g, "");
+      const instagramRaw = getTag("contact:instagram", "instagram");
+      const facebookRaw = getTag("contact:facebook", "facebook");
+      const instagram = instagramRaw ? (/^https?:\/\//i.test(instagramRaw) ? cleanUrl(instagramRaw) : "https://www.instagram.com/" + instagramRaw.replace(/^@/, "").replace(/^.*instagram\.com\//i, "").replace(/\/$/, "") + "/") : "";
+      const facebook = facebookRaw ? (/^https?:\/\//i.test(facebookRaw) ? cleanUrl(facebookRaw) : "https://www.facebook.com/" + facebookRaw.replace(/^@/, "").replace(/^.*facebook\.com\//i, "").replace(/\/$/, "")) : "";
+      const email = getTag("email", "contact:email");
+      const street = getTag("addr:street");
+      const houseNumber = getTag("addr:housenumber");
+      const suburb = getTag("addr:suburb", "addr:neighbourhood");
+      const postcode = getTag("addr:postcode");
+      const address = [street, houseNumber, suburb, postcode].filter(Boolean).join(", ");
+      const lat = element.lat ?? element.center?.lat ?? null;
+      const lon = element.lon ?? element.center?.lon ?? null;
+      const normalizedName = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const sameName = normalizedNames.get(normalizedName) || [];
+      const possibleDuplicate = sameName.some((item) =>
+        (phone && item.phone && phone === item.phone) ||
+        (lat !== null && lon !== null && item.lat !== null && item.lon !== null &&
+          Math.abs(lat - item.lat) < 0.00025 && Math.abs(lon - item.lon) < 0.00025)
+      );
+      sameName.push({ phone, lat, lon });
+      normalizedNames.set(normalizedName, sameName);
+
+      const scoreFactors = {
+        phone: phone ? 20 : 0,
+        website: website ? 10 : 0,
+        address: address ? 10 : 0,
+        social: instagram || facebook ? 10 : 0,
+        openingHours: tags.opening_hours ? 5 : 0
+      };
+      const score = Math.min(95, 35 + Object.values(scoreFactors).reduce((sum, value) => sum + value, 0));
 
       return [{
-        id,
-        name,
-        category,
-        city: city + location,
-        phone: phone.replace(/[^0-9+]/g, ""),
+        id, name, category, city: city + (address ? ", " + address : ""), address, phone, whatsapp,
+        email, instagram, facebook, lat, lon, openingHours: getTag("opening_hours"),
         websiteStatus: website ? "website_found" : "website_not_identified",
-        website,
-        score,
+        website, score, scoreFactors, possibleDuplicate,
+        duplicateNote: possibleDuplicate ? "Nome e contato/localização semelhantes a outro registro; revise antes de salvar." : "",
         source: "OpenStreetMap",
-        sourceUrl: `https://www.openstreetmap.org/${element.type}/${element.id}`,
+        sourceUrl: "https://www.openstreetmap.org/" + element.type + "/" + element.id,
         discoveredAt: new Date().toISOString()
       }];
     });
