@@ -166,7 +166,8 @@ out center 60;`;
 
     const elements = await queryOverpass(query);
     const seen = new Set<string>();
-    const normalizedNames = new Map<string, Array<{ phone: string; lat: number | null; lon: number | null }>>();
+    const normalizedNames = new Map<string, Array<{ id: string; phone: string; lat: number | null; lon: number | null }>>();
+    const possibleDuplicateIds = new Set<string>();
     const results = elements.flatMap((element) => {
       const tags = element.tags || {};
       const name = (tags.name || "").trim();
@@ -206,7 +207,11 @@ out center 60;`;
         (lat !== null && lon !== null && item.lat !== null && item.lon !== null &&
           Math.abs(lat - item.lat) < 0.00025 && Math.abs(lon - item.lon) < 0.00025)
       );
-      sameName.push({ phone, lat, lon });
+      if (possibleDuplicate) {
+        possibleDuplicateIds.add(id);
+        sameName.forEach((item) => possibleDuplicateIds.add(item.id));
+      }
+      sameName.push({ id, phone, lat, lon });
       normalizedNames.set(normalizedName, sameName);
 
       const scoreFactors = {
@@ -228,6 +233,12 @@ out center 60;`;
         sourceUrl: "https://www.openstreetmap.org/" + element.type + "/" + element.id,
         discoveredAt: new Date().toISOString()
       }];
+    });
+    results.forEach((lead) => {
+      if (possibleDuplicateIds.has(lead.id)) {
+        lead.possibleDuplicate = true;
+        lead.duplicateNote = "Nome e contato/localização semelhantes a outro registro; revise antes de salvar.";
+      }
     });
 
     sendJson(res, {
