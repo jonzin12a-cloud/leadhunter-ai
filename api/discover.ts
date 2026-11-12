@@ -186,7 +186,7 @@ out center 60;`;
       };
       const website = cleanUrl(getTag("website", "contact:website", "url"));
       const normalizePhone = (value: string) => {
-        const linkedNumber = value.match(/(?:wa\\.me\\/|phone=)(\\+?[0-9]+)/i)?.[1];
+        const linkedNumber = value.match(/(?:wa\.me\/|phone=)(\+?[0-9]+)/i)?.[1];
         return (linkedNumber || value).replace(/[^0-9+]/g, "");
       };
       const phoneRaw = getTag("phone", "contact:phone", "mobile", "contact:mobile");
