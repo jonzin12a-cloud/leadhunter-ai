@@ -35,7 +35,8 @@ export default async function handler(request: Request): Promise<Response> {
   if (!categoryFilter) return json({ error: "Segmento não suportado." }, 400);
 
   // The city is treated as a literal Overpass value, not executable query syntax.
-  const city = cityInput.split(",")[0].trim().replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const city = cityInput.split(",")[0].trim().replace(/[^\p{L}\p{N}\s'.-]/gu, "").replace(/\s+/g, " ");
+  if (city.length < 2) return json({ error: "Informe o nome da cidade sem caracteres especiais inválidos." }, 400);
   const query = `[out:json][timeout:25];
 area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 (
