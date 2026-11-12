@@ -62,7 +62,7 @@ async function geocodeCity(city: string): Promise<{ south: number; west: number;
         if (south < north && west < east) return { south, west, north, east };
       }
       const coordinates = feature?.geometry?.coordinates;
-      if (coordinates?.length >= 2 && coordinates.slice(0, 2).every(Number.isFinite)) {
+      if (coordinates && coordinates.length >= 2 && coordinates.slice(0, 2).every(Number.isFinite)) {
         const [lon, lat] = coordinates;
         // Fallback local aproximado de 8 km em torno do centro quando Photon não retorna extent.
         const latDelta = 0.072;
