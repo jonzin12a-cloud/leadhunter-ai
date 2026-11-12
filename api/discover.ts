@@ -41,7 +41,7 @@ area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 (
   nwr["name"]${categoryFilter}(area.searchArea);
 );
-out center tags 100;`;
+out center 100;`;
 
   try {
     const upstream = await fetch(OVERPASS_ENDPOINT, {
