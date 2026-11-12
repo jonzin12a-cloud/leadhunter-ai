@@ -31,3 +31,13 @@
 .spin{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:760px){.discovery-form{grid-template-columns:1fr}.discovery-form .primary-btn{width:100%;justify-content:center}.discovery-panel{padding:14px}.result-row{gap:7px}.result-main small{font-size:8px}.save-result{padding:0 7px}}
+
+/* Lead management actions and section navigation */
+.row-actions{display:flex;align-items:center;gap:6px}
+.danger-action{color:#e69a9a;border-color:#58383e;background:#2a1c27}
+.danger-action:hover{background:#42232d;color:#ffc0c0}
+#overview,#discovery-panel,#lead-pipeline{scroll-margin-top:22px}
+.filters select:focus,.search-box:focus-within{border-color:#9278e6;outline:none}
+.result-row .result-link{flex-shrink:0}
+.result-main .evidence{overflow-wrap:anywhere}
+@media(max-width:760px){.row-actions{gap:4px}.row-action{width:30px;height:30px}}
