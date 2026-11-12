@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import type { User } from "firebase/auth";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { collection, deleteDoc, doc, getDocs, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
+import { auth, db } from "./lib/firebase";
+import AuthScreen from "./AuthScreen";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Building2, Check, ChevronDown,
   Globe2, LayoutDashboard, MapPin, MessageCircle, Plus, Search, Settings2,
@@ -61,7 +66,9 @@ const readableApiError = (value: unknown, status: number) => {
 };
 
 function App() {
-  const [leads, setLeads] = useState<Lead[]>(readSavedLeads);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("Todos os status");
   const [duplicateFilter, setDuplicateFilter] = useState("Todos os leads");
@@ -79,19 +86,41 @@ function App() {
   const [newPhone, setNewPhone] = useState("");
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(leads)); }
-    catch {
-      setNotice("Não foi possível salvar no navegador. Exporte um CSV para não perder suas alterações.");
-    }
-  }, [leads]);
+    if (!auth) { setAuthReady(true); return; }
+    return onAuthStateChanged(auth, nextUser => {
+      setUser(nextUser);
+      setAuthReady(true);
+    });
+  }, []);
 
   useEffect(() => {
-    const syncFromAnotherTab = (event: StorageEvent) => {
-      if (event.key === STORAGE_KEY) setLeads(readSavedLeads());
+    if (!user || !db) { setLeads([]); return; }
+    let active = true;
+    let unsubscribe = () => {};
+    const leadsRef = collection(db, "users", user.uid, "leads");
+    const connect = async () => {
+      const existing = await getDocs(leadsRef);
+      if (!active) return;
+      if (existing.empty) {
+        const legacy = readSavedLeads();
+        for (const lead of legacy) await setDoc(doc(leadsRef, lead.id), lead);
+      }
+      // Evita que dados legados de uma conta sejam importados para outra no mesmo navegador.
+      localStorage.removeItem(STORAGE_KEY);
+      if (!active) return;
+      unsubscribe = onSnapshot(leadsRef, snapshot => {
+        setLeads(snapshot.docs.map(item => ({ ...item.data(), id: item.id } as Lead)));
+      }, err => {
+        console.error("[LeadHunter] Firestore:", err);
+        setNotice("Não foi possível sincronizar sua carteira. Verifique a configuração e as regras do Firestore.");
+      });
     };
-    window.addEventListener("storage", syncFromAnotherTab);
-    return () => window.removeEventListener("storage", syncFromAnotherTab);
-  }, []);
+    connect().catch(err => {
+      console.error("[LeadHunter] Falha ao carregar carteira:", err);
+      setNotice("Falha ao acessar sua carteira na nuvem. Confira se o Cloud Firestore está ativado e as regras foram publicadas.");
+    });
+    return () => { active = false; unsubscribe(); };
+  }, [user]);
 
   const filtered = useMemo(() => leads.filter((lead) =>
     [lead.name, lead.category, lead.city, lead.address || "", lead.phone, lead.whatsapp || "", lead.email || ""].some(value => value.toLowerCase().includes(query.toLowerCase())) &&
@@ -99,21 +128,29 @@ function App() {
     (duplicateFilter === "Todos os leads" || (duplicateFilter === "Possíveis duplicidades" ? !!lead.possibleDuplicate : !lead.possibleDuplicate))
   ), [leads, query, statusFilter, duplicateFilter]);
 
-  const updateStatus = (id: string, next: LeadStatus) => setLeads(old => old.map(lead => lead.id === id ? { ...lead, status: next } : lead));
+  const updateStatus = async (id: string, next: LeadStatus) => {
+    if (!user || !db) return;
+    try { await updateDoc(doc(db, "users", user.uid, "leads", id), { status: next }); }
+    catch { setNotice("Não foi possível atualizar o status deste lead."); }
+  };
   const deleteLead = (lead: Lead) => {
     if (!window.confirm("Excluir " + lead.name + " da sua carteira? Esta ação não pode ser desfeita.")) return;
-    setLeads(old => old.filter(item => item.id !== lead.id));
-    setNotice("Lead removido da carteira.");
+    if (!user || !db) return;
+    try { await deleteDoc(doc(db, "users", user.uid, "leads", lead.id)); setNotice("Lead removido da carteira."); }
+    catch { setNotice("Não foi possível excluir este lead. Tente novamente."); }
   };
   const navigateTo = (section: string) => {
     setActive(section);
     const target = section === "Descobrir leads" ? "discovery-panel" : section === "Minha carteira" ? "lead-pipeline" : "overview";
     document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  const saveResult = (result: DiscoveryResult) => {
+  const saveResult = async (result: DiscoveryResult) => {
+    if (!user || !db) return;
     if (leads.some(lead => lead.id === result.id)) { setNotice("Esta empresa já está na sua carteira."); return; }
-    setLeads(old => [{ ...result, status: "Novo" }, ...old]);
-    setNotice("Empresa salva na sua carteira.");
+    try {
+      await setDoc(doc(db, "users", user.uid, "leads", result.id), { ...result, status: "Novo" });
+      setNotice("Empresa salva na sua carteira na nuvem.");
+    } catch { setNotice("Não foi possível salvar este lead. Verifique as regras do Firestore."); }
   };
   const discover = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -133,11 +170,14 @@ function App() {
         : err instanceof Error ? err.message : "Falha inesperada na pesquisa.");
     } finally { setLoading(false); }
   };
-  const addManualLead = () => {
-    if (!newName.trim() || !newCity.trim()) return;
+  const addManualLead = async () => {
+    if (!newName.trim() || !newCity.trim() || !user || !db) return;
     const id = "manual-" + crypto.randomUUID();
-    setLeads(old => [{ id, name: newName.trim(), category: newCategory, city: newCity.trim(), phone: newPhone.replace(/\D/g, ""), websiteStatus: "verification_pending", website: "", score: 50, status: "Novo", source: "Cadastro manual", sourceUrl: "", discoveredAt: new Date().toISOString() }, ...old]);
-    setNewName(""); setNewPhone(""); setShowAdd(false); setNotice("Lead adicionado à carteira.");
+    const lead: Lead = { id, name: newName.trim(), category: newCategory, city: newCity.trim(), phone: newPhone.replace(/\D/g, ""), websiteStatus: "verification_pending", website: "", score: 50, status: "Novo", source: "Cadastro manual", sourceUrl: "", discoveredAt: new Date().toISOString() };
+    try {
+      await setDoc(doc(db, "users", user.uid, "leads", id), lead);
+      setNewName(""); setNewPhone(""); setShowAdd(false); setNotice("Lead adicionado à carteira na nuvem.");
+    } catch { setNotice("Não foi possível adicionar o lead. Verifique as regras do Firestore."); }
   };
   const exportCsv = () => {
     const rows = [["Empresa", "Segmento", "Cidade", "Endereço", "Latitude", "Longitude", "Telefone", "WhatsApp", "E-mail", "Instagram", "Facebook", "Website", "URL do website", "Status comercial", "Score", "Fatores do score", "Possível duplicidade", "Fonte", "Evidência", "Data da descoberta"],
@@ -154,6 +194,9 @@ function App() {
   };
   const nav = [{ name: "Visão geral", icon: LayoutDashboard }, { name: "Descobrir leads", icon: Target }, { name: "Minha carteira", icon: Users }];
 
+  if (!authReady) return <div className="auth-loading">Carregando sua sessão segura...</div>;
+  if (!user || !db) return <AuthScreen />;
+
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><Target size={19}/></div><div><b>lead<span>hunter</span></b><small>INTELLIGENCE SUITE</small></div></div>
@@ -162,10 +205,10 @@ function App() {
       <nav>{nav.map(item => <button key={item.name} className={active === item.name ? "nav-item selected" : "nav-item"} onClick={() => navigateTo(item.name)}><item.icon size={17}/>{item.name}</button>)}</nav>
       <div className="nav-label tools-label">PREFERÊNCIAS</div>
       <button className="nav-item" onClick={() => setNotice("Configurações avançadas serão habilitadas com a camada de autenticação.")}><Settings2 size={17}/>Configurações</button>
-      <div className="sidebar-bottom"><div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><b>Prospecção com evidências</b><p>Descubra empresas mapeadas e valide cada oportunidade antes do contato.</p><button onClick={() => navigateTo("Descobrir leads")}>Abrir radar <ArrowUpRight size={13}/></button></div><div className="profile"><div className="avatar">L</div><div><b>Seu workspace</b><small>Ambiente inicial</small></div></div></div>
+      <div className="sidebar-bottom"><div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><b>Prospecção com evidências</b><p>Descubra empresas mapeadas e valide cada oportunidade antes do contato.</p><button onClick={() => navigateTo("Descobrir leads")}>Abrir radar <ArrowUpRight size={13}/></button></div><div className="profile"><div className="avatar">{(user.displayName || user.email || "U").slice(0,1).toUpperCase()}</div><div><b>{user.displayName || "Sua conta"}</b><small>{user.email}</small></div></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{active}</b></div><div className="top-actions"><div className="live"><i/> Pesquisa por fonte pública</div><button className="icon-button" aria-label="Notificações"><Bell size={18}/></button><div className="avatar small">L</div></div></header>
+      <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{active}</b></div><div className="top-actions"><div className="live"><i/> Pesquisa por fonte pública</div><span className="account-email">{user.email}</span><button className="logout-button" onClick={() => auth && signOut(auth)}>Sair</button></div></header>
       <div className="content" id="overview">
         <div className="welcome-row"><div><div className="eyebrow"><Sparkles size={13}/> INTELIGÊNCIA COMERCIAL</div><h1>Encontre oportunidades<br/><span>antes da concorrência.</span></h1><p className="subtitle">Descubra negócios locais e organize sua prospecção em um só lugar.</p></div><button className="primary-btn" onClick={() => setShowAdd(true)}><Plus size={17}/> Adicionar lead</button></div>
 
@@ -193,7 +236,7 @@ function App() {
         <div className="section-heading leads-heading" id="lead-pipeline"><div><h3>Minha carteira</h3><p>Gerencie o relacionamento e acompanhe o pipeline.</p></div><button className="text-btn" onClick={exportCsv}><ArrowDownToLine size={14}/> Exportar CSV</button></div>
         <div className="filters"><div className="search-box"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar empresa, cidade ou segmento..."/></div><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Todos os status</option>{["Novo", "Contatado", "Interessado", "Convertido"].map(value => <option key={value}>{value}</option>)}</select><select aria-label="Filtrar duplicidades" value={duplicateFilter} onChange={e => setDuplicateFilter(e.target.value)}><option>Todos os leads</option><option>Possíveis duplicidades</option><option>Sem duplicidade sinalizada</option></select><button className="filter-btn" onClick={() => { setQuery(""); setStatusFilter("Todos os status"); setDuplicateFilter("Todos os leads"); }}>Limpar filtros</button></div>
         <div className="table-wrap"><table><thead><tr><th>EMPRESA</th><th>SEGMENTO</th><th>LOCALIZAÇÃO</th><th>PRESENÇA DIGITAL</th><th>QUALIFICAÇÃO</th><th>FONTE</th><th>STATUS</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map(lead => <tr key={lead.id}><td><div className="company"><div className="company-logo violet">{lead.name.slice(0, 2).toUpperCase()}</div><div><b>{lead.name}</b><small>{lead.phone || "Telefone não informado"}</small></div></div></td><td>{lead.category}</td><td><span className="location"><MapPin size={13}/>{lead.city}</span></td><td><span className={"site-status " + (lead.websiteStatus === "website_found" ? "has-site" : lead.websiteStatus === "website_not_identified" ? "no-site" : "check-site")}><i/>{labelForWebsite(lead.websiteStatus)}</span>{lead.website && <a href={lead.website} target="_blank" rel="noreferrer" className="website-inline">Abrir</a>}</td><td><div className="lead-quality"><b>{lead.score}/100</b>{lead.possibleDuplicate && <small>Revisar duplicidade</small>}</div></td><td>{lead.sourceUrl ? <a href={lead.sourceUrl} target="_blank" rel="noreferrer" className="source-link">Ver evidência <ExternalLink size={11}/></a> : lead.source}</td><td><select className={"status-select status-" + lead.status.toLowerCase()} value={lead.status} onChange={e => updateStatus(lead.id, e.target.value as LeadStatus)}><option>Novo</option><option>Contatado</option><option>Interessado</option><option>Convertido</option></select></td><td><div className="row-actions"><button className="row-action" title="Abrir conversa no WhatsApp" aria-label={"Abrir WhatsApp de " + lead.name} onClick={() => { const phone = lead.whatsapp || lead.phone; if (!phone) { setNotice("Esta empresa não possui telefone cadastrado na fonte."); return; } window.open("https://wa.me/" + phone.replace(/\D/g, "") + "?text=" + encodeURIComponent("Olá! Encontrei o perfil da " + lead.name + " e gostaria de apresentar uma ideia para fortalecer sua presença digital. Podemos conversar?"), "_blank", "noopener,noreferrer"); }}><MessageCircle size={15}/></button><button className="row-action danger-action" title="Excluir lead" aria-label={"Excluir " + lead.name} onClick={() => deleteLead(lead)}><Trash2 size={15}/></button></div></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty">{leads.length === 0 ? "Sua carteira ainda está vazia. Pesquise empresas no radar ou adicione um lead manualmente." : "Nenhum lead corresponde aos filtros selecionados."}</div>}</div>
-        <div className="footnote"><div><span className="demo-dot"/> Os leads são armazenados neste navegador.</div><span>Fontes públicas podem estar incompletas. Confirme os dados antes de qualquer abordagem comercial.</span></div>
+        <div className="footnote"><div><span className="demo-dot"/> Carteira sincronizada com sua conta na nuvem.</div><span>Fontes públicas podem estar incompletas. Confirme os dados antes de qualquer abordagem comercial.</span></div>
         <footer>© 2026 LeadHunter AI <span>Descoberta responsável. Prospecção inteligente.</span><span className="footer-right">Dados de fontes públicas · OpenStreetMap</span></footer>
       </div>
     </main>
