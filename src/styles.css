@@ -46,3 +46,35 @@
 .lead-quality b{font-size:10px;color:#c9bbff}
 .lead-quality small{font-size:8px;color:#e9b77d}
 @media(min-width:761px){.table-wrap table{min-width:980px}}
+
+
+/* Firebase authentication */
+.auth-screen{min-height:100vh;display:grid;place-items:center;padding:28px 16px;background:radial-gradient(ellipse at 50% 0%,#252044 0%,#0b1020 58%)}
+.auth-card{width:min(440px,100%);padding:34px;border:1px solid #303852;border-radius:18px;background:linear-gradient(155deg,#151e32,#101827);box-shadow:0 28px 90px #0008}
+.auth-brand{display:flex;align-items:center;gap:11px;margin-bottom:34px}
+.auth-mark{width:42px;height:42px;border-radius:13px;background:linear-gradient(140deg,#b6a0ff,#7956df);display:grid;place-items:center;color:#fff;box-shadow:0 5px 18px #805ce54d}
+.auth-brand b{font:800 21px Manrope;letter-spacing:-.8px;color:#f6f4ff}
+.auth-brand b span{color:#a994ff}
+.auth-brand small{display:block;font-size:8px;letter-spacing:1.8px;color:#77819a;margin-top:2px}
+.auth-eyebrow{font-size:9px;letter-spacing:1.6px;color:#a997ff;font-weight:700}
+.auth-card h1{font:800 27px Manrope;letter-spacing:-1px;color:#f4f5fb;margin:10px 0 8px}
+.auth-description{font-size:12px;line-height:1.6;color:#8995aa;margin:0 0 23px}
+.auth-label{display:grid;gap:8px;margin:15px 0;color:#aab4c8;font-size:10px}
+.auth-label span{display:flex;align-items:center;gap:7px}
+.auth-label input{height:43px;border:1px solid #303b53;background:#0d1525;border-radius:8px;color:#e4e9f4;padding:0 12px;outline:0;font-size:12px}
+.auth-label input:focus{border-color:#9278e6;box-shadow:0 0 0 3px #9278e622}
+.auth-submit{width:100%;height:43px;margin-top:8px;border:1px solid #9a83ef;border-radius:8px;background:linear-gradient(135deg,#a58bff,#7858d9);color:white;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:9px}
+.auth-submit:disabled{opacity:.45;cursor:not-allowed}
+.auth-links{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:20px;color:#59657d;font-size:11px}
+.auth-links button{border:0;background:none;color:#b7a6ff;font-size:11px;padding:3px}
+.auth-security{display:flex;align-items:center;justify-content:center;gap:7px;border-top:1px solid #29334a;margin-top:25px;padding-top:18px;color:#718099;font-size:10px}
+.auth-warning,.auth-error,.auth-success{padding:11px 12px;border-radius:8px;font-size:11px;line-height:1.5;margin:12px 0}
+.auth-warning{background:#332b1e;border:1px solid #66502b;color:#edc98c}
+.auth-warning p{margin:4px 0 0}
+.auth-error{background:#3b2029;border:1px solid #713744;color:#ffb4bd}
+.auth-success{background:#17372f;border:1px solid #2c6655;color:#9be2c4}
+.auth-loading{min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#b9aaff;font:600 13px Manrope}
+.account-email{font-size:10px;color:#8e9ab0;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout-button{height:30px;padding:0 11px;border:1px solid #35415a;border-radius:7px;background:#182136;color:#c2cbe0;font-size:10px}
+.logout-button:hover{border-color:#9a83ef;color:#fff}
+@media(max-width:700px){.auth-card{padding:26px 21px}.account-email{display:none}}
