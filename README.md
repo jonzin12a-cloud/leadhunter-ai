@@ -7,9 +7,13 @@ Plataforma de descoberta e organização de leads empresariais, com foco em opor
 - Pesquisa de estabelecimentos por cidade e segmento usando a API pública Overpass do OpenStreetMap.
 - Exibição da origem de cada resultado e link para o objeto de origem.
 - Identificação de websites cadastrados na fonte. Quando não há URL, o produto informa **“website não identificado”** — nunca afirma que a empresa não possui site.
+- Enriquecimento dos dados disponíveis no OpenStreetMap: telefone, WhatsApp, e-mail, redes sociais, endereço, coordenadas e horário de funcionamento.
+- Sinalização de possíveis duplicidades por nome combinado com telefone ou proximidade geográfica; filiais não são removidas automaticamente.
+- Pontuação heurística com fatores explicados na interface.
 - Importação manual de resultados para a carteira.
-- Pipeline comercial (Novo, Contatado, Interessado, Convertido).
-- Persistência local no navegador e exportação CSV.
+- Pipeline comercial (Novo, Contatado, Interessado, Convertido), pesquisa por dados de contato, filtro de possíveis duplicidades, abertura de WhatsApp e exclusão com confirmação.
+- Exportação CSV com contatos, coordenadas, pontuação e evidências, protegida contra fórmulas de planilha.
+- Persistência local no navegador.
 - API server-side em `/api/discover`, com validação de parâmetros, timeout e respostas de erro.
 - CI no GitHub Actions para executar TypeScript e build de produção.
 
@@ -37,7 +41,7 @@ O projeto está preparado para deploy na Vercel como aplicação Vite com funç�
 - A cobertura do OpenStreetMap varia por cidade e segmento. Resultados ausentes não provam que uma empresa inexiste.
 - “Website não identificado” significa apenas que não foi encontrada uma URL nos dados consultados. A confirmação exige pesquisa adicional.
 - Telefones e endereços são dados fornecidos por colaboradores do OpenStreetMap e podem estar desatualizados. Valide-os antes de qualquer contato.
-- Os dados da carteira ficam no armazenamento local do navegador. Não há sincronização entre dispositivos, login, banco de dados ou backup em nuvem nesta versão.
+- Os dados da carteira ficam no armazenamento local do navegador. Não há sincronização entre dispositivos, login, banco de dados ou backup em nuvem nesta versão. Exporte o CSV regularmente para manter uma cópia externa.
 - O score é heurístico e serve apenas para ordenar a análise; não é uma previsão validada de conversão.
 - A fonte deve ser atribuída como © OpenStreetMap contributors. Revise os termos e políticas da instância Overpass escolhida antes de aumentar o volume ou comercializar o serviço.
 
