@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   let url: URL;
   try {
-    url = new URL(req.url || "/", `https://${req.headers.host || "localhost"}`);
+    url = new URL(req.url || "/", "https://leadhunter.internal");
   } catch {
     sendJson(res, { error: "Endereço de pesquisa inválido." }, 400);
     return;
