@@ -36,6 +36,13 @@ type PhotonFeature = {
   geometry?: { coordinates?: number[] };
 };
 
+function sendJson(res: VercelResponse, data: unknown, status = 200, headers: Record<string, string> = {}): void {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+  res.status(status).json(data);
+}
+
 async function geocodeCity(city: string): Promise<{ south: number; west: number; north: number; east: number }> {
   // Photon é a primeira opção; Nominatim fica como fallback independente.
   const photonUrl = new URL("https://photon.komoot.io/api/");
