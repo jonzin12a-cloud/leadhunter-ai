@@ -102,18 +102,15 @@ async function queryOverpass(query: string): Promise<OsmElement[]> {
   const controller = new AbortController();
   const abortAll = setTimeout(() => controller.abort(), 55000);
   const apiKey = process.env.OVERPASS_API_KEY?.trim();
-  const endpoints = [
-    ...(apiKey ? [{ url: "https://api.overpass.ch/v1/interpreter", headers: { "X-API-Key": apiKey } }] : []),
-    ...OVERPASS_ENDPOINTS.map((url) => ({ url, headers: {} as Record<string, string> }))
-  ];
-  const attempts = endpoints.map(async ({ url, headers: authHeaders }) => {
+
+  const fetchElements = async (url: string, headers: Record<string, string> = {}): Promise<OsmElement[]> => {
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Accept": "application/json",
         "User-Agent": "LeadHunterAI/1.0 (business discovery)",
-        ...authHeaders
+        ...headers
       },
       body: new URLSearchParams({ data: query }),
       signal: controller.signal
@@ -123,16 +120,45 @@ async function queryOverpass(query: string): Promise<OsmElement[]> {
     if (data.remark) throw new Error(`${new URL(url).hostname}: ${data.remark}`);
     if (!Array.isArray(data.elements)) throw new Error(`${new URL(url).hostname}: resposta inválida`);
     return data.elements;
-  });
+  };
 
   try {
-    // Prioriza o serviço autenticado; mantém instâncias públicas como fallback.
-    const elements = await Promise.any(attempts);
-    controller.abort();
-    return elements;
-  } catch (error) {
-    console.error("[LeadHunter] Falha nas instâncias Overpass:", error);
-    throw new Error("Nenhuma instância Overpass respondeu");
+    // Primeiro consulta o serviço autenticado. Uma resposta vazia não impede os fallbacks.
+    if (apiKey) {
+      try {
+        const authenticated = await fetchElements("https://api.overpass.ch/v1/interpreter", { "X-API-Key": apiKey });
+        if (authenticated.length > 0) {
+          controller.abort();
+          return authenticated;
+        }
+        console.warn("[LeadHunter] Overpass.ch respondeu sem resultados; tentando fontes alternativas.");
+      } catch (error) {
+        console.warn("[LeadHunter] Overpass.ch indisponível:", error instanceof Error ? error.message : "erro desconhecido");
+      }
+    }
+
+    // Fontes públicas em paralelo; respostas vazias não vencem respostas com resultados.
+    const attempts = OVERPASS_ENDPOINTS.map(async (url) => {
+      const elements = await fetchElements(url);
+      if (elements.length === 0) throw new Error(`${new URL(url).hostname}: consulta sem resultados`);
+      return elements;
+    });
+
+    try {
+      const elements = await Promise.any(attempts);
+      controller.abort();
+      return elements;
+    } catch (error) {
+      const settled = await Promise.allSettled(attempts);
+      const hadValidEmptyResponse = settled.some((item) =>
+        item.status === "rejected" &&
+        item.reason instanceof Error &&
+        item.reason.message.endsWith(": consulta sem resultados")
+      );
+      if (hadValidEmptyResponse) return [];
+      console.error("[LeadHunter] Falha nas instâncias Overpass:", error);
+      throw new Error("Nenhuma instância Overpass respondeu");
+    }
   } finally {
     clearTimeout(abortAll);
   }
