@@ -191,7 +191,7 @@ out center 60;`;
       };
       const phoneRaw = getTag("phone", "contact:phone", "mobile", "contact:mobile");
       const phone = normalizePhone(phoneRaw);
-      const whatsapp = normalizePhone(getTag("contact:whatsapp", "whatsapp", "phone", "contact:phone"));
+      const whatsapp = normalizePhone(getTag("contact:whatsapp", "whatsapp"));
       const instagramRaw = getTag("contact:instagram", "instagram");
       const facebookRaw = getTag("contact:facebook", "facebook");
       const instagram = instagramRaw ? (/^https?:\/\//i.test(instagramRaw) ? cleanUrl(instagramRaw) : "https://www.instagram.com/" + instagramRaw.replace(/^@/, "").replace(/^.*instagram\.com\//i, "").replace(/\/$/, "") + "/") : "";
@@ -202,8 +202,10 @@ out center 60;`;
       const suburb = getTag("addr:suburb", "addr:neighbourhood");
       const postcode = getTag("addr:postcode");
       const address = getTag("addr:full") || [street, houseNumber, suburb, postcode].filter(Boolean).join(", ");
-      const lat = element.lat ?? element.center?.lat ?? null;
-      const lon = element.lon ?? element.center?.lon ?? null;
+      const rawLat = element.lat ?? element.center?.lat;
+      const rawLon = element.lon ?? element.center?.lon;
+      const lat = typeof rawLat === "number" && Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90 ? rawLat : null;
+      const lon = typeof rawLon === "number" && Number.isFinite(rawLon) && rawLon >= -180 && rawLon <= 180 ? rawLon : null;
       const normalizedName = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const sameName = normalizedNames.get(normalizedName) || [];
       const possibleDuplicate = sameName.some((item) =>
@@ -218,14 +220,17 @@ out center 60;`;
       sameName.push({ id, phone, lat, lon });
       normalizedNames.set(normalizedName, sameName);
 
+      // Completude objetiva dos dados disponíveis (não é probabilidade de conversão).
       const scoreFactors = {
-        phone: phone ? 20 : 0,
-        website: website ? 10 : 0,
-        address: address ? 10 : 0,
-        social: instagram || facebook ? 10 : 0,
-        openingHours: tags.opening_hours ? 5 : 0
+        phone: phone ? 25 : 0,
+        website: website ? 15 : 0,
+        address: address ? 15 : 0,
+        social: instagram || facebook ? 15 : 0,
+        email: email ? 10 : 0,
+        coordinates: lat !== null && lon !== null ? 10 : 0,
+        openingHours: tags.opening_hours ? 10 : 0
       };
-      const score = Math.min(95, 35 + Object.values(scoreFactors).reduce((sum, value) => sum + value, 0));
+      const score = Object.values(scoreFactors).reduce((sum, value) => sum + value, 0);
 
       return [{
         id, name, category, city: cityInput, address, phone, whatsapp,
