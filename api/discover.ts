@@ -1,4 +1,8 @@
-const OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter";
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter"
+];
 
 const allowedCategories: Record<string, string> = {
   "Restaurantes e cafés": '["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court"]',
@@ -71,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  const query = `[out:json][timeout:25];
+  const query = `[out:json][timeout:10];
 area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 (
   nwr["name"]${categoryFilter}(area.searchArea);
@@ -79,28 +83,45 @@ area["name"="${city}"]["boundary"="administrative"]->.searchArea;
 out center 100;`;
 
   try {
-    const upstream = await fetch(OVERPASS_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
-      },
-      body: new URLSearchParams({ data: query }),
-      signal: AbortSignal.timeout(28000)
-    });
+    let payload: { elements?: OsmElement[] } | undefined;
+    let lastStatus = 0;
 
-    if (!upstream.ok) {
-      if (upstream.status === 429) {
-        sendJson(res, { error: "A fonte pública está temporariamente ocupada. Aguarde um pouco e tente novamente." }, 503, {
-          "Retry-After": upstream.headers.get("Retry-After") || "30"
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const upstream = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "User-Agent": "LeadHunterAI/0.1 (public business discovery)"
+          },
+          body: new URLSearchParams({ data: query }),
+          signal: AbortSignal.timeout(12000)
         });
-        return;
+
+        if (upstream.status === 429) {
+          lastStatus = 429;
+          continue;
+        }
+        if (!upstream.ok) {
+          lastStatus = upstream.status;
+          continue;
+        }
+
+        payload = await upstream.json() as { elements?: OsmElement[] };
+        break;
+      } catch {
+        // Try the next independent public Overpass instance.
       }
-      sendJson(res, { error: "A fonte OpenStreetMap não respondeu. Tente novamente mais tarde." }, 502);
-      return;
     }
 
-    const payload = await upstream.json() as { elements?: OsmElement[] };
+    if (!payload) {
+      if (lastStatus === 429) {
+        sendJson(res, { error: "As fontes públicas estão temporariamente ocupadas. Aguarde um pouco e tente novamente." }, 503, { "Retry-After": "30" });
+        return;
+      }
+      sendJson(res, { error: "As fontes públicas de mapas estão demorando ou indisponíveis. Tente novamente em instantes." }, 503, { "Retry-After": "15" });
+      return;
+    }
     const seen = new Set<string>();
     const results = (payload.elements || []).flatMap((element) => {
       const tags = element.tags || {};
@@ -146,12 +167,7 @@ out center 100;`;
       attribution: "© OpenStreetMap contributors",
       searchedAt: new Date().toISOString()
     });
-  } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    sendJson(res, {
-      error: timedOut
-        ? "A consulta excedeu o tempo limite da fonte pública. Tente novamente."
-        : "Não foi possível acessar a fonte pública no momento."
-    }, 502);
+  } catch {
+    sendJson(res, { error: "Não foi possível concluir a pesquisa. Tente novamente em instantes." }, 502);
   }
 }
