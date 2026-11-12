@@ -24,6 +24,19 @@ const readSavedLeads = (): Lead[] => {
 };
 const csvCell = (value: unknown) => '"' + String(value ?? "").replaceAll('"', '""') + '"';
 
+const readableApiError = (value: unknown, status: number) => {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object") {
+    const details = value as Record<string, unknown>;
+    for (const key of ["message", "error", "details", "code"]) {
+      const candidate = details[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate;
+    }
+    try { return JSON.stringify(value); } catch { /* Fall through to the HTTP status. */ }
+  }
+  return `A API de prospecção respondeu com HTTP ${status}, mas não enviou uma mensagem de erro legível.`;
+};
+
 function App() {
   const [leads, setLeads] = useState<Lead[]>(readSavedLeads);
   const [query, setQuery] = useState("");
@@ -61,9 +74,10 @@ function App() {
     try {
       const params = new URLSearchParams({ city: city.trim(), category: segment });
       const response = await fetch("/api/discover?" + params.toString(), { headers: { Accept: "application/json" } });
-      const payload = await response.json() as { results?: DiscoveryResult[]; error?: string; message?: string };
-      if (!response.ok) throw new Error(payload.error || "Não foi possível consultar a fonte de dados.");
-      setResults(payload.results ?? []);
+      const payload = await response.json().catch(() => ({})) as { results?: DiscoveryResult[]; error?: unknown; message?: unknown };
+      if (!response.ok) throw new Error(readableApiError(payload.error ?? payload.message ?? payload, response.status));
+      if (!Array.isArray(payload.results)) throw new Error("A API respondeu, mas retornou um formato inesperado. Verifique os registros da função /api/discover na Vercel.");
+      setResults(payload.results);
       if (!payload.results?.length) setError("Nenhuma empresa foi retornada para essa combinação. Tente outro segmento ou cidade.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha inesperada na pesquisa.");
