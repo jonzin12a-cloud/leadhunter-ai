@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Building2, Check, ChevronDown,
   Globe2, LayoutDashboard, MapPin, MessageCircle, Plus, Search, Settings2,
-  Sparkles, Target, Users, X, LoaderCircle, ExternalLink, Radar
+  Sparkles, Target, Users, X, LoaderCircle, ExternalLink, Radar, Trash2
 } from "lucide-react";
 
 type WebsiteStatus = "website_found" | "website_not_identified" | "verification_pending";
@@ -22,10 +22,24 @@ const STORAGE_KEY = "leadhunter-ai-leads-v1";
 const categories = ["Todos os segmentos", "Restaurantes e cafés", "Lojas e comércio", "Saúde e bem-estar", "Beleza e estética", "Serviços profissionais", "Academias e esportes", "Hospedagem e turismo"];
 const labelForWebsite = (status: WebsiteStatus) => status === "website_found" ? "Website encontrado" : status === "website_not_identified" ? "Website não identificado" : "Verificação pendente";
 const readSavedLeads = (): Lead[] => {
-  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) as Lead[] : []; }
-  catch { return []; }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is Lead =>
+      !!item && typeof item === "object" &&
+      typeof item.id === "string" && typeof item.name === "string" &&
+      typeof item.category === "string" && typeof item.city === "string" &&
+      typeof item.phone === "string" && typeof item.status === "string"
+    );
+  } catch { return []; }
 };
-const csvCell = (value: unknown) => '"' + String(value ?? "").replaceAll('"', '""') + '"';
+const csvCell = (value: unknown) => {
+  const text = String(value ?? "");
+  const safe = /^[\\s]*[=+@\\-]/.test(text) ? "'" + text : text;
+  return '"' + safe.replaceAll('"', '""') + '"';
+};
 
 const readableApiError = (value: unknown, status: number) => {
   if (typeof value === "string" && value.trim()) return value;
@@ -44,6 +58,7 @@ function App() {
   const [leads, setLeads] = useState<Lead[]>(readSavedLeads);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("Todos os status");
+  const [duplicateFilter, setDuplicateFilter] = useState("Todos os leads");
   const [active, setActive] = useState("Visão geral");
   const [city, setCity] = useState("Feira de Santana, BA");
   const [segment, setSegment] = useState("Restaurantes e cafés");
@@ -57,14 +72,30 @@ function App() {
   const [newCity, setNewCity] = useState("Feira de Santana, BA");
   const [newPhone, setNewPhone] = useState("");
 
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(leads)); }, [leads]);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(leads)); }
+    catch {
+      setNotice("Não foi possível salvar no navegador. Exporte um CSV para não perder suas alterações.");
+    }
+  }, [leads]);
 
   const filtered = useMemo(() => leads.filter((lead) =>
-    (lead.name.toLowerCase().includes(query.toLowerCase()) || lead.category.toLowerCase().includes(query.toLowerCase()) || lead.city.toLowerCase().includes(query.toLowerCase())) &&
-    (statusFilter === "Todos os status" || lead.status === statusFilter)
-  ), [leads, query, statusFilter]);
+    [lead.name, lead.category, lead.city, lead.address || "", lead.phone, lead.whatsapp || "", lead.email || ""].some(value => value.toLowerCase().includes(query.toLowerCase())) &&
+    (statusFilter === "Todos os status" || lead.status === statusFilter) &&
+    (duplicateFilter === "Todos os leads" || (duplicateFilter === "Possíveis duplicidades" ? !!lead.possibleDuplicate : !lead.possibleDuplicate))
+  ), [leads, query, statusFilter, duplicateFilter]);
 
   const updateStatus = (id: string, next: LeadStatus) => setLeads(old => old.map(lead => lead.id === id ? { ...lead, status: next } : lead));
+  const deleteLead = (lead: Lead) => {
+    if (!window.confirm("Excluir " + lead.name + " da sua carteira? Esta ação não pode ser desfeita.")) return;
+    setLeads(old => old.filter(item => item.id !== lead.id));
+    setNotice("Lead removido da carteira.");
+  };
+  const navigateTo = (section: string) => {
+    setActive(section);
+    const target = section === "Descobrir leads" ? "discovery-panel" : section === "Minha carteira" ? "lead-pipeline" : "overview";
+    document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   const saveResult = (result: DiscoveryResult) => {
     if (leads.some(lead => lead.id === result.id)) { setNotice("Esta empresa já está na sua carteira."); return; }
     setLeads(old => [{ ...result, status: "Novo" }, ...old]);
@@ -76,14 +107,16 @@ function App() {
     setLoading(true); setError(""); setResults([]);
     try {
       const params = new URLSearchParams({ city: city.trim(), category: segment });
-      const response = await fetch("/api/discover?" + params.toString(), { headers: { Accept: "application/json" } });
+      const response = await fetch("/api/discover?" + params.toString(), { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(32000) });
       const payload = await response.json().catch(() => ({})) as { results?: DiscoveryResult[]; error?: unknown; message?: unknown };
       if (!response.ok) throw new Error(readableApiError(payload.error ?? payload.message ?? payload, response.status));
       if (!Array.isArray(payload.results)) throw new Error("A API respondeu, mas retornou um formato inesperado. Verifique os registros da função /api/discover na Vercel.");
       setResults(payload.results);
       if (!payload.results?.length) setError("Nenhuma empresa foi retornada para essa combinação. Tente outro segmento ou cidade.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha inesperada na pesquisa.");
+      setError(err instanceof DOMException && err.name === "TimeoutError"
+        ? "A pesquisa excedeu o tempo limite. Tente novamente em instantes."
+        : err instanceof Error ? err.message : "Falha inesperada na pesquisa.");
     } finally { setLoading(false); }
   };
   const addManualLead = () => {
@@ -106,17 +139,17 @@ function App() {
       <div className="brand"><div className="brand-mark"><Target size={19}/></div><div><b>lead<span>hunter</span></b><small>INTELLIGENCE SUITE</small></div></div>
       <div className="workspace"><div className="workspace-icon">L</div><div><b>LeadHunter AI</b><small>Workspace principal</small></div><ChevronDown size={15}/></div>
       <div className="nav-label">WORKSPACE</div>
-      <nav>{nav.map(item => <button key={item.name} className={active === item.name ? "nav-item selected" : "nav-item"} onClick={() => setActive(item.name)}><item.icon size={17}/>{item.name}</button>)}</nav>
+      <nav>{nav.map(item => <button key={item.name} className={active === item.name ? "nav-item selected" : "nav-item"} onClick={() => navigateTo(item.name)}><item.icon size={17}/>{item.name}</button>)}</nav>
       <div className="nav-label tools-label">PREFERÊNCIAS</div>
       <button className="nav-item" onClick={() => setNotice("Configurações avançadas serão habilitadas com a camada de autenticação.")}><Settings2 size={17}/>Configurações</button>
-      <div className="sidebar-bottom"><div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><b>Prospecção com evidências</b><p>Descubra empresas mapeadas e valide cada oportunidade antes do contato.</p><button onClick={() => setActive("Descobrir leads")}>Abrir radar <ArrowUpRight size={13}/></button></div><div className="profile"><div className="avatar">L</div><div><b>Seu workspace</b><small>Ambiente inicial</small></div></div></div>
+      <div className="sidebar-bottom"><div className="upgrade-card"><div className="upgrade-icon"><Sparkles size={16}/></div><b>Prospecção com evidências</b><p>Descubra empresas mapeadas e valide cada oportunidade antes do contato.</p><button onClick={() => navigateTo("Descobrir leads")}>Abrir radar <ArrowUpRight size={13}/></button></div><div className="profile"><div className="avatar">L</div><div><b>Seu workspace</b><small>Ambiente inicial</small></div></div></div>
     </aside>
     <main className="main">
       <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{active}</b></div><div className="top-actions"><div className="live"><i/> Pesquisa por fonte pública</div><button className="icon-button" aria-label="Notificações"><Bell size={18}/></button><div className="avatar small">L</div></div></header>
-      <div className="content">
+      <div className="content" id="overview">
         <div className="welcome-row"><div><div className="eyebrow"><Sparkles size={13}/> INTELIGÊNCIA COMERCIAL</div><h1>Encontre oportunidades<br/><span>antes da concorrência.</span></h1><p className="subtitle">Descubra negócios locais e organize sua prospecção em um só lugar.</p></div><button className="primary-btn" onClick={() => setShowAdd(true)}><Plus size={17}/> Adicionar lead</button></div>
 
-        <section className="hero-strip"><div className="hero-glow"/><div className="hero-copy"><div className="hero-tag"><span/> RADAR DE OPORTUNIDADES</div><h2>Empresas reais. Fontes rastreáveis.</h2><p>Pesquise estabelecimentos mapeados por cidade e segmento. Cada resultado inclui sua fonte e o status observado do website.</p><button onClick={() => setActive("Descobrir leads")}>Começar uma descoberta <ArrowUpRight size={15}/></button></div><div className="hero-art"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="orb-center"><Radar size={31}/></div><div className="float-card card-a"><Globe2 size={15}/><span>Dados públicos</span><b>Com evidências</b></div><div className="float-card card-b"><Activity size={15}/><span>Carteira</span><b>{leads.length} leads</b></div></div></section>
+        <section className="hero-strip"><div className="hero-glow"/><div className="hero-copy"><div className="hero-tag"><span/> RADAR DE OPORTUNIDADES</div><h2>Empresas reais. Fontes rastreáveis.</h2><p>Pesquise estabelecimentos mapeados por cidade e segmento. Cada resultado inclui sua fonte e o status observado do website.</p><button onClick={() => navigateTo("Descobrir leads")}>Começar uma descoberta <ArrowUpRight size={15}/></button></div><div className="hero-art"><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="orb-center"><Radar size={31}/></div><div className="float-card card-a"><Globe2 size={15}/><span>Dados públicos</span><b>Com evidências</b></div><div className="float-card card-b"><Activity size={15}/><span>Carteira</span><b>{leads.length} leads</b></div></div></section>
 
         <div className="section-heading"><div><h3>Visão geral</h3><p>Indicadores calculados a partir da sua carteira salva.</p></div><span className="date-chip">Atualizado automaticamente</span></div>
         <div className="metrics">
@@ -126,7 +159,7 @@ function App() {
           <div className="metric"><div className="metric-top"><span>Convertidos</span><span className="metric-icon green"><Check size={17}/></span></div><div className="metric-value">{leads.filter(l => l.status === "Convertido").length.toString().padStart(2, "0")}<small> leads</small></div><div className="metric-foot"><span>Vendas registradas</span></div></div>
         </div>
 
-        <section className="discovery-panel">
+        <section className="discovery-panel" id="discovery-panel">
           <div className="section-heading"><div><div className="eyebrow"><Radar size={13}/> PESQUISA DE EMPRESAS</div><h3>Descobrir novos leads</h3><p>Consulta a base colaborativa do OpenStreetMap. Cobertura varia por localidade.</p></div></div>
           <form className="discovery-form" onSubmit={discover}>
             <label>Cidade, estado<input value={city} onChange={e => setCity(e.target.value)} placeholder="Ex.: Feira de Santana, BA" required minLength={2}/></label>
@@ -137,9 +170,9 @@ function App() {
           {results.length > 0 && <div className="results-block"><div className="results-title"><b>{results.length} empresas encontradas</b><span>Revise antes de salvar</span></div><div className="result-list">{results.map(result => <div className="result-row" key={result.id}><div className="result-icon"><Building2 size={17}/></div><div className="result-main"><b>{result.name}</b><small>{result.category} · {result.city}</small><small className="evidence">Fonte: OpenStreetMap · {labelForWebsite(result.websiteStatus)} · Score {result.score}/95</small><small className="evidence">Pontuação: telefone +{result.scoreFactors?.phone ?? 0} · website +{result.scoreFactors?.website ?? 0} · endereço +{result.scoreFactors?.address ?? 0} · redes +{result.scoreFactors?.social ?? 0} · horário +{result.scoreFactors?.openingHours ?? 0}</small>{(result.phone || result.email || result.address) && <small className="evidence">{[result.phone, result.email, result.address].filter(Boolean).join(" · ")}</small>}{result.possibleDuplicate && <small className="evidence">⚠ Possível duplicidade: revise antes de salvar</small>}</div>{result.website && <a href={result.website} target="_blank" rel="noreferrer" className="result-link" aria-label="Abrir website"><ExternalLink size={15}/></a>}{result.whatsapp && <a href={"https://wa.me/" + result.whatsapp.replace(/\D/g, "")} target="_blank" rel="noreferrer" className="result-link" aria-label="Abrir WhatsApp"><MessageCircle size={15}/></a>}{result.email && <a href={"mailto:" + result.email} className="result-link" aria-label="Enviar e-mail"><span>@</span></a>}{result.instagram && <a href={result.instagram} target="_blank" rel="noreferrer" className="result-link" aria-label="Abrir Instagram"><span>IG</span></a>}{result.facebook && <a href={result.facebook} target="_blank" rel="noreferrer" className="result-link" aria-label="Abrir Facebook"><span>f</span></a>}<a href={result.sourceUrl} target="_blank" rel="noreferrer" className="result-link" aria-label="Ver fonte"><MapPin size={15}/></a><button className="save-result" onClick={() => saveResult(result)} disabled={leads.some(lead => lead.id === result.id)}>{leads.some(lead => lead.id === result.id) ? <Check size={14}/> : <Plus size={14}/>} {leads.some(lead => lead.id === result.id) ? "Salvo" : "Salvar"}</button></div>)}</div><p className="attribution">Dados © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · O status “website não identificado” significa apenas que não há URL cadastrada nessa fonte, não que a empresa não possua site.</p></div>}
         </section>
 
-        <div className="section-heading leads-heading"><div><h3>Minha carteira</h3><p>Gerencie o relacionamento e acompanhe o pipeline.</p></div><button className="text-btn" onClick={exportCsv}><ArrowDownToLine size={14}/> Exportar CSV</button></div>
-        <div className="filters"><div className="search-box"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar empresa, cidade ou segmento..."/></div><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Todos os status</option>{["Novo", "Contatado", "Interessado", "Convertido"].map(value => <option key={value}>{value}</option>)}</select><button className="filter-btn" onClick={() => { setQuery(""); setStatusFilter("Todos os status"); }}>Limpar filtros</button></div>
-        <div className="table-wrap"><table><thead><tr><th>EMPRESA</th><th>SEGMENTO</th><th>LOCALIZAÇÃO</th><th>PRESENÇA DIGITAL</th><th>FONTE</th><th>STATUS</th><th></th></tr></thead><tbody>{filtered.map(lead => <tr key={lead.id}><td><div className="company"><div className="company-logo violet">{lead.name.slice(0, 2).toUpperCase()}</div><div><b>{lead.name}</b><small>{lead.phone || "Telefone não informado"}</small></div></div></td><td>{lead.category}</td><td><span className="location"><MapPin size={13}/>{lead.city}</span></td><td><span className={"site-status " + (lead.websiteStatus === "website_found" ? "has-site" : lead.websiteStatus === "website_not_identified" ? "no-site" : "check-site")}><i/>{labelForWebsite(lead.websiteStatus)}</span>{lead.website && <a href={lead.website} target="_blank" rel="noreferrer" className="website-inline">Abrir</a>}</td><td>{lead.sourceUrl ? <a href={lead.sourceUrl} target="_blank" rel="noreferrer" className="source-link">Ver evidência <ExternalLink size={11}/></a> : lead.source}</td><td><select className={"status-select status-" + lead.status.toLowerCase()} value={lead.status} onChange={e => updateStatus(lead.id, e.target.value as LeadStatus)}><option>Novo</option><option>Contatado</option><option>Interessado</option><option>Convertido</option></select></td><td><button className="row-action" title="Abrir conversa no WhatsApp" onClick={() => { if (!lead.phone) { setNotice("Esta empresa não possui telefone cadastrado na fonte."); return; } window.open("https://wa.me/" + lead.phone.replace(/\D/g, "") + "?text=" + encodeURIComponent("Olá! Encontrei o perfil da " + lead.name + " e gostaria de apresentar uma ideia para fortalecer sua presença digital. Podemos conversar?"), "_blank", "noopener,noreferrer"); }}><ArrowUpRight size={16}/></button></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty">{leads.length === 0 ? "Sua carteira ainda está vazia. Pesquise empresas no radar ou adicione um lead manualmente." : "Nenhum lead corresponde aos filtros selecionados."}</div>}</div>
+        <div className="section-heading leads-heading" id="lead-pipeline"><div><h3>Minha carteira</h3><p>Gerencie o relacionamento e acompanhe o pipeline.</p></div><button className="text-btn" onClick={exportCsv}><ArrowDownToLine size={14}/> Exportar CSV</button></div>
+        <div className="filters"><div className="search-box"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar empresa, cidade ou segmento..."/></div><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Todos os status</option>{["Novo", "Contatado", "Interessado", "Convertido"].map(value => <option key={value}>{value}</option>)}</select><select aria-label="Filtrar duplicidades" value={duplicateFilter} onChange={e => setDuplicateFilter(e.target.value)}><option>Todos os leads</option><option>Possíveis duplicidades</option><option>Sem duplicidade sinalizada</option></select><button className="filter-btn" onClick={() => { setQuery(""); setStatusFilter("Todos os status"); setDuplicateFilter("Todos os leads"); }}>Limpar filtros</button></div>
+        <div className="table-wrap"><table><thead><tr><th>EMPRESA</th><th>SEGMENTO</th><th>LOCALIZAÇÃO</th><th>PRESENÇA DIGITAL</th><th>FONTE</th><th>STATUS</th><th>AÇÕES</th></tr></thead><tbody>{filtered.map(lead => <tr key={lead.id}><td><div className="company"><div className="company-logo violet">{lead.name.slice(0, 2).toUpperCase()}</div><div><b>{lead.name}</b><small>{lead.phone || "Telefone não informado"}</small></div></div></td><td>{lead.category}</td><td><span className="location"><MapPin size={13}/>{lead.city}</span></td><td><span className={"site-status " + (lead.websiteStatus === "website_found" ? "has-site" : lead.websiteStatus === "website_not_identified" ? "no-site" : "check-site")}><i/>{labelForWebsite(lead.websiteStatus)}</span>{lead.website && <a href={lead.website} target="_blank" rel="noreferrer" className="website-inline">Abrir</a>}</td><td>{lead.sourceUrl ? <a href={lead.sourceUrl} target="_blank" rel="noreferrer" className="source-link">Ver evidência <ExternalLink size={11}/></a> : lead.source}</td><td><select className={"status-select status-" + lead.status.toLowerCase()} value={lead.status} onChange={e => updateStatus(lead.id, e.target.value as LeadStatus)}><option>Novo</option><option>Contatado</option><option>Interessado</option><option>Convertido</option></select></td><td><button className="row-action" title="Abrir conversa no WhatsApp" onClick={() => { if (!lead.phone) { setNotice("Esta empresa não possui telefone cadastrado na fonte."); return; } window.open("https://wa.me/" + lead.phone.replace(/\D/g, "") + "?text=" + encodeURIComponent("Olá! Encontrei o perfil da " + lead.name + " e gostaria de apresentar uma ideia para fortalecer sua presença digital. Podemos conversar?"), "_blank", "noopener,noreferrer"); }}><ArrowUpRight size={16}/></button></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty">{leads.length === 0 ? "Sua carteira ainda está vazia. Pesquise empresas no radar ou adicione um lead manualmente." : "Nenhum lead corresponde aos filtros selecionados."}</div>}</div>
         <div className="footnote"><div><span className="demo-dot"/> Os leads são armazenados neste navegador.</div><span>Fontes públicas podem estar incompletas. Confirme os dados antes de qualquer abordagem comercial.</span></div>
         <footer>© 2026 LeadHunter AI <span>Descoberta responsável. Prospecção inteligente.</span><span className="footer-right">Dados de fontes públicas · OpenStreetMap</span></footer>
       </div>
