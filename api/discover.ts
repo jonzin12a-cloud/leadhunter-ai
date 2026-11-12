@@ -39,7 +39,7 @@ type PhotonFeature = {
 async function geocodeCity(city: string): Promise<{ south: number; west: number; north: number; east: number }> {
   // Photon é a primeira opção; Nominatim fica como fallback independente.
   const photonUrl = new URL("https://photon.komoot.io/api/");
-  photonUrl.search = new URLSearchParams({ q: `${city}, Bahia, Brazil`, limit: "1", lang: "pt" }).toString();
+  photonUrl.search = new URLSearchParams({ q: `${city}, Brazil`, limit: "1", lang: "pt" }).toString();
 
   try {
     const response = await fetch(photonUrl, {
@@ -69,7 +69,7 @@ async function geocodeCity(city: string): Promise<{ south: number; west: number;
     console.warn("[LeadHunter] Photon indisponível:", error instanceof Error ? error.message : "erro desconhecido");
   }
 
-  const params = new URLSearchParams({ q: `${city}, Bahia, Brazil`, format: "jsonv2", limit: "1", countrycodes: "br" });
+  const params = new URLSearchParams({ q: `${city}, Brazil`, format: "jsonv2", limit: "1", countrycodes: "br" });
   const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
     headers: {
       "Accept": "application/json",
@@ -148,7 +148,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   try {
     // Geocodificar primeiro evita a busca cara por nome de área administrativa no Overpass.
-    const bounds = await geocodeCity(city);
+    const bounds = await geocodeCity(cityInput);
     const query = `[out:json][timeout:8];
 (
   nwr["name"]${categoryFilter}(${bounds.south},${bounds.west},${bounds.north},${bounds.east});
@@ -203,12 +203,16 @@ out center 60;`;
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Erro externo desconhecido";
     console.error("[LeadHunter] Falha na descoberta:", detail);
-    if (detail.includes("Geocodificação") || detail.includes("Cidade não localizada") || detail.includes("Limites geográficos")) {
-      sendJson(res, { error: "Não conseguimos localizar essa cidade. Confira o nome e tente novamente." }, 422);
+    if (detail === "CITY_NOT_FOUND" || detail === "INVALID_CITY_BOUNDS") {
+      sendJson(res, { error: "Não conseguimos localizar essa cidade. Informe cidade e estado, por exemplo: Feira de Santana, BA." }, 422);
+      return;
+    }
+    if (detail.startsWith("GEOCODER_HTTP_")) {
+      sendJson(res, { error: "O serviço de localização está temporariamente indisponível. Tente novamente em instantes." }, 503, { "Retry-After": "20" });
       return;
     }
     sendJson(res, {
-      error: "A fonte pública de empresas está temporariamente indisponível. Tente novamente em instantes."
+      error: "A cidade foi localizada, mas a fonte de estabelecimentos não respondeu. Tente novamente em instantes."
     }, 503, { "Retry-After": "20" });
   }
 }
