@@ -15,8 +15,9 @@ Plataforma de descoberta e organização de leads empresariais, com foco em opor
 - Exportação CSV com contatos, coordenadas, pontuação e evidências, protegida contra fórmulas de planilha.
 - Autenticação por e-mail e senha com Firebase Authentication (cadastro, login, logout e recuperação de senha).
 - Carteira sincronizada por usuário no Cloud Firestore, com isolamento por UID e regras de segurança.
-- Migração única da carteira legada do navegador para a primeira conta autenticada.
-- API server-side em `/api/discover`, com validação de parâmetros, timeout e respostas de erro.
+- Importação da carteira legada do navegador mediante confirmação explícita da conta autenticada.
+- API server-side em `/api/discover`, com validação de parâmetros, timeouts, rate limiting por IP e respostas de erro.
+- Rate limiting distribuído opcional com Upstash Redis REST; sem as variáveis Upstash, a API usa apenas um limite local por instância.
 - CI no GitHub Actions para executar TypeScript e build de produção.
 
 ## Stack
@@ -51,6 +52,17 @@ A interface pode ser desenvolvida localmente com Vite. Para testar a função se
    - `VITE_FIREBASE_MESSAGING_SENDER_ID`
    - `VITE_FIREBASE_APP_ID`
 8. Faça um novo deploy na Vercel após salvar as variáveis.
+
+### Proteção de abuso da API (recomendado para produção)
+
+A rota `/api/discover` limita pesquisas a 10 por minuto por IP. Para que o limite seja compartilhado entre todas as instâncias serverless da Vercel, configure um banco Redis no [Upstash](https://upstash.com/), copie a REST URL e o REST token e cadastre estas variáveis no projeto Vercel para Production, Preview e Development:
+
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+
+Sem essas duas variáveis, a API permanece em modo de contingência com limite em memória por instância; esse modo reduz rajadas simples, mas não garante um limite global quando a Vercel escala horizontalmente. Com Upstash configurado, o contador é atômico e compartilhado entre instâncias. Se o serviço Redis configurado ficar indisponível, a API falha de forma fechada com HTTP 503, em vez de liberar pesquisas sem proteção.
+
+O IP é transformado em hash SHA-256 antes de ser usado como chave no Redis. Não publique o REST token nem o inclua em variáveis `VITE_*`.
 
 Para publicar as regras usando a Firebase CLI, selecione o projeto correto e execute:
 
