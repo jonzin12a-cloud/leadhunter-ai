@@ -101,11 +101,16 @@ function App() {
     const connect = async () => {
       const existing = await getDocs(leadsRef);
       if (!active) return;
-      if (existing.empty) {
-        const legacy = readSavedLeads();
-        for (const lead of legacy) await setDoc(doc(leadsRef, lead.id), lead);
+      // Mescla os dados locais ausentes sem sobrescrever a carteira já existente na nuvem.
+      // Se uma gravação falhar, o catch mantém a cópia local para permitir nova tentativa.
+      const legacy = readSavedLeads();
+      const existingIds = new Set(existing.docs.map(item => item.id));
+      for (const lead of legacy) {
+        if (!existingIds.has(lead.id)) {
+          await setDoc(doc(leadsRef, lead.id), lead);
+        }
       }
-      // Evita que dados legados de uma conta sejam importados para outra no mesmo navegador.
+      // Só remove a cópia local depois que todas as gravações pendentes forem concluídas.
       localStorage.removeItem(STORAGE_KEY);
       if (!active) return;
       unsubscribe = onSnapshot(leadsRef, snapshot => {
