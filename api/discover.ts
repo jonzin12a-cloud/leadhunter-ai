@@ -9,6 +9,71 @@ const OVERPASS_ENDPOINTS = [
 
 const NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search";
 
+// Limite local por instância: proteção básica contra rajadas.
+// Para limite consistente entre instâncias/serverless, configure um armazenamento distribuído.
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function getClientIp(req: VercelRequest): string {
+  const realIp = req.headers?.["x-real-ip"];
+  if (typeof realIp === "string" && realIp.trim()) return realIp.trim();
+  const forwarded = req.headers?.["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    const addresses = forwarded.split(",").map(value => value.trim()).filter(Boolean);
+    return addresses[addresses.length - 1] || "unknown";
+  }
+  return "unknown";
+}
+
+async function checkRequestRateLimit(ip: string): Promise<{ allowed: boolean; remaining: number; retryAfter: number; distributed: boolean }> {
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL?.replace(/\/+$/, "");
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!redisUrl || !redisToken) {
+    return { ...checkRateLimit(ip), distributed: false };
+  }
+
+  // Hash do IP para não armazenar o endereço original no Redis.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip));
+  const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  const script = "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]); end; local ttl=redis.call('PTTL',KEYS[1]); return {n,ttl}";
+  const endpoint = `${redisUrl}/eval/${encodeURIComponent(script)}/1/${encodeURIComponent("leadhunter:discover:" + hash)}/${RATE_LIMIT_WINDOW_MS}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${redisToken}` },
+    signal: AbortSignal.timeout(2500)
+  });
+  if (!response.ok) throw new Error("RATE_LIMIT_STORE_UNAVAILABLE");
+  const payload = await response.json() as { result?: unknown };
+  if (!Array.isArray(payload.result) || typeof payload.result[0] !== "number" || typeof payload.result[1] !== "number") {
+    throw new Error("RATE_LIMIT_STORE_INVALID_RESPONSE");
+  }
+  const count = payload.result[0];
+  const ttl = payload.result[1];
+  return {
+    allowed: count <= RATE_LIMIT_MAX_REQUESTS,
+    remaining: Math.max(0, RATE_LIMIT_MAX_REQUESTS - count),
+    retryAfter: Math.max(1, Math.ceil(ttl / 1000)),
+    distributed: true
+  };
+}
+
+function checkRateLimit(ip: string, now = Date.now()): { allowed: boolean; remaining: number; retryAfter: number } {
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (bucket.resetAt <= now) rateLimitBuckets.delete(key);
+  }
+  const current = rateLimitBuckets.get(ip);
+  if (!current || current.resetAt <= now) {
+    rateLimitBuckets.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - 1, retryAfter: 0 };
+  }
+  if (current.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return { allowed: false, remaining: 0, retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)) };
+  }
+  current.count += 1;
+  return { allowed: true, remaining: RATE_LIMIT_MAX_REQUESTS - current.count, retryAfter: 0 };
+}
+
 const allowedCategories: Record<string, string> = {
   "Restaurantes e cafés": '["amenity"~"restaurant|cafe|fast_food|bar|pub|food_court"]',
   "Lojas e comércio": '["shop"]',
@@ -19,7 +84,7 @@ const allowedCategories: Record<string, string> = {
   "Hospedagem e turismo": '["tourism"~"hotel|guest_house|hostel|motel"]'
 };
 
-type VercelRequest = { method?: string; url?: string };
+type VercelRequest = { method?: string; url?: string; headers?: Record<string, string | string[] | undefined> };
 type VercelResponse = {
   status(code: number): VercelResponse;
   setHeader(name: string, value: string): VercelResponse;
@@ -100,7 +165,7 @@ async function geocodeCity(city: string): Promise<{ south: number; west: number;
 
 async function queryOverpass(query: string): Promise<OsmElement[]> {
   const controller = new AbortController();
-  const abortAll = setTimeout(() => controller.abort(), 55000);
+  const abortAll = setTimeout(() => controller.abort(), 20000);
   const apiKey = process.env.OVERPASS_API_KEY?.trim();
 
   const fetchElements = async (url: string, headers: Record<string, string> = {}): Promise<OsmElement[]> => {
@@ -170,6 +235,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
+  const ip = getClientIp(req);
+  let limit: { allowed: boolean; remaining: number; retryAfter: number; distributed: boolean };
+  try {
+    limit = await checkRequestRateLimit(ip);
+  } catch (error) {
+    console.error("[LeadHunter] Rate limit indisponível:", error);
+    sendJson(res, { error: "Proteção contra excesso de pesquisas temporariamente indisponível. Tente novamente." }, 503, { "Retry-After": "10" });
+    return;
+  }
+  if (!limit.allowed) {
+    sendJson(res, { error: "Limite de pesquisas atingido. Aguarde antes de tentar novamente." }, 429, {
+      "Retry-After": String(limit.retryAfter),
+      "X-RateLimit-Limit": String(RATE_LIMIT_MAX_REQUESTS),
+      "X-RateLimit-Remaining": "0"
+    });
+    return;
+  }
+
   const params = new URLSearchParams((req.url || "").split("?", 2)[1] || "");
   const cityInput = (params.get("city") || "").trim();
   const category = params.get("category") || "";
@@ -177,7 +260,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     sendJson(res, { error: "Informe uma cidade válida (2 a 100 caracteres)." }, 400);
     return;
   }
-  const categoryFilter = allowedCategories[category];
+  const categoryFilter = Object.hasOwn(allowedCategories, category) ? allowedCategories[category] : undefined;
   if (!categoryFilter) {
     sendJson(res, { error: "Segmento não suportado." }, 400);
     return;
@@ -192,7 +275,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   try {
     // Geocodificar primeiro evita a busca cara por nome de área administrativa no Overpass.
     const bounds = await geocodeCity(cityInput);
-    const query = `[out:json][timeout:18];
+    const query = `[out:json][timeout:16];
 (
   nwr["name"]${categoryFilter}(${bounds.south},${bounds.west},${bounds.north},${bounds.east});
 );
