@@ -104,14 +104,21 @@ function App() {
       // Mescla os dados locais ausentes sem sobrescrever a carteira já existente na nuvem.
       // Se uma gravação falhar, o catch mantém a cópia local para permitir nova tentativa.
       const legacy = readSavedLeads();
-      const existingIds = new Set(existing.docs.map(item => item.id));
-      for (const lead of legacy) {
-        if (!existingIds.has(lead.id)) {
-          await setDoc(doc(leadsRef, lead.id), lead);
+      if (legacy.length > 0) {
+        const shouldImport = window.confirm(
+          `Encontramos ${legacy.length} lead(s) salvos neste navegador. Deseja importar esses dados para a conta ${user.email || "atual"}? Faça isso apenas se reconhecer esses dados como seus.`
+        );
+        if (shouldImport) {
+          const existingIds = new Set(existing.docs.map(item => item.id));
+          for (const lead of legacy) {
+            if (!existingIds.has(lead.id)) {
+              await setDoc(doc(leadsRef, lead.id), lead);
+            }
+          }
+          // Só remove a cópia local depois que todas as gravações pendentes forem concluídas.
+          localStorage.removeItem(STORAGE_KEY);
         }
       }
-      // Só remove a cópia local depois que todas as gravações pendentes forem concluídas.
-      localStorage.removeItem(STORAGE_KEY);
       if (!active) return;
       unsubscribe = onSnapshot(leadsRef, snapshot => {
         setLeads(snapshot.docs.map(item => ({ ...item.data(), id: item.id } as Lead)));
