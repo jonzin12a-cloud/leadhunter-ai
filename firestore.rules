@@ -1,10 +1,57 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/leads/{leadId} {
-      allow read, create, update, delete: if request.auth != null
-        && request.auth.uid == userId;
+    function signedInAs(userId) {
+      return request.auth != null && request.auth.uid == userId;
     }
+
+    function validLead(leadId) {
+      let data = request.resource.data;
+      let keys = data.keys();
+      return keys.hasAll([
+          'id', 'name', 'category', 'city', 'phone', 'websiteStatus',
+          'website', 'score', 'status', 'source', 'sourceUrl', 'discoveredAt'
+        ])
+        && keys.hasOnly([
+          'id', 'name', 'category', 'city', 'phone', 'websiteStatus',
+          'website', 'score', 'status', 'source', 'sourceUrl', 'discoveredAt',
+          'address', 'whatsapp', 'email', 'instagram', 'facebook', 'lat', 'lon',
+          'openingHours', 'possibleDuplicate', 'duplicateNote', 'scoreFactors'
+        ])
+        && data.id == leadId
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.category is string && data.category.size() <= 100
+        && data.city is string && data.city.size() > 0 && data.city.size() <= 120
+        && data.phone is string && data.phone.size() <= 40
+        && data.websiteStatus in ['website_found', 'website_not_identified', 'verification_pending']
+        && data.website is string && data.website.size() <= 2048
+        && data.score is int && data.score >= 0 && data.score <= 100
+        && data.status in ['Novo', 'Contatado', 'Interessado', 'Convertido']
+        && data.source is string && data.source.size() <= 100
+        && data.sourceUrl is string && data.sourceUrl.size() <= 2048
+        && data.discoveredAt is string && data.discoveredAt.size() <= 40
+        && (!keys.hasAny(['address']) || (data.address is string && data.address.size() <= 500))
+        && (!keys.hasAny(['whatsapp']) || (data.whatsapp is string && data.whatsapp.size() <= 40))
+        && (!keys.hasAny(['email']) || (data.email is string && data.email.size() <= 254))
+        && (!keys.hasAny(['instagram']) || (data.instagram is string && data.instagram.size() <= 2048))
+        && (!keys.hasAny(['facebook']) || (data.facebook is string && data.facebook.size() <= 2048))
+        && (!keys.hasAny(['openingHours']) || (data.openingHours is string && data.openingHours.size() <= 300))
+        && (!keys.hasAny(['possibleDuplicate']) || data.possibleDuplicate is bool)
+        && (!keys.hasAny(['duplicateNote']) || (data.duplicateNote is string && data.duplicateNote.size() <= 500))
+        && (!keys.hasAny(['lat']) || data.lat == null || (data.lat is number && data.lat >= -90 && data.lat <= 90))
+        && (!keys.hasAny(['lon']) || data.lon == null || (data.lon is number && data.lon >= -180 && data.lon <= 180))
+        && (!keys.hasAny(['scoreFactors']) || data.scoreFactors is map);
+    }
+
+    match /users/{userId}/leads/{leadId} {
+      allow read, list, delete: if signedInAs(userId);
+      allow create: if signedInAs(userId) && validLead(leadId);
+      // A interface só altera o status comercial; impede mudanças arbitrárias nos demais campos.
+      allow update: if signedInAs(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status in ['Novo', 'Contatado', 'Interessado', 'Convertido'];
+    }
+
     // Nenhum outro documento é acessível pelo cliente.
     match /{document=**} {
       allow read, write: if false;
